@@ -1,6 +1,7 @@
+pub mod parser;
+
 use bevy::prelude::*;
 use std::sync::Arc;
-pub mod parser;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Coord {
@@ -11,20 +12,32 @@ pub struct Coord {
 
 pub enum Direction {}
 
-pub struct Gen {}
+pub struct Timer {
+    index: usize,
+    current: u8,
+}
 
-pub struct Timer {}
+impl Timer {
+    pub fn tick(&mut self) -> bool {
+        self.current -= 1;
+        self.current == 0
+    }
+}
 
 #[derive(Component)]
 pub struct Cell {
-    gens: [Gen; 16],
-    timers: [Timer; 4],
+    gens: Vec<parser::Value>,
+    timers: Vec<Timer>,
 }
 
 impl Cell {
-    pub fn new(parser: &parser::Parser) -> Self {
-        todo!("Todo parser loading new cell");
+    pub fn new(_parser: &parser::Parser) -> Self {
+        todo!()
     }
 
-    pub fn tick(&mut self, parser: Arc<parser::Parser>) {}
+    pub fn tick(&mut self, _parser: Arc<parser::Parser>) {
+        for mut _t in self.timers.drain(..) {
+            todo!();
+        }
+    }
 }

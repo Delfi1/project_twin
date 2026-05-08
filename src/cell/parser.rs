@@ -1,46 +1,50 @@
-//! Genetic information gen.sim files parser
-// File signature:
+//! Парсер генетической информации из файла gen.sim
+// Сигнатура файла:
 // --------------------------------------
-// <NAME>: ACTIVATOR | DEACTIVATOR
-// M0(Radius): M0
-// T0[TICKS]: M0 M1 M2 | M3 M4
+// Тип:
+//     <Ген>: [Условие активации](Радиус) {Отключаемые морфогены}
 // --------------------------------------
-// Index is selected by first number of gen
+// Пример:
+// stem:
+//     M0: M0
+//     T0: M0 M1 M2 | M3 M4
+// --------------------------------------
+// Индекс - первое число гена
 //
-// Gen types:
-// M(index) <- Morphogen
-// T(index) <- Timer. Ticks to wait after activation
+// Типы генов:
+// M(index) <- Морфоген
+// T(index) <- Таймер. Ожидает N тиков перед активацией, количество тиков задаётся в активирующем гене отдельно
 
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use std::sync::Arc;
 
-/// Parser reads this Value from file
-#[derive(Debug, Clone, Copy)]
+/// Парсер будет читать эти значения из файла
+#[derive(Debug, Default, Clone, Copy)]
 pub enum Value {
-    Gen {},
-    Timer {},
+    #[default]
+    None,
+    Gen {
+        radius: u8,
+    },
+    Timer {
+        ticks: u8,
+    },
 }
 
 pub const GENS: usize = 16;
 pub const TIMERS: usize = 4;
 
-#[derive(Asset, TypePath, Debug)]
+#[derive(Debug, Clone, Copy)]
+pub struct CellType {
+    gens: [Value; GENS],
+    timers: [Value; TIMERS],
+}
+
+#[derive(Asset, Default, TypePath, Debug)]
 pub struct Parser {
-    pub gens: [Value; GENS],
-    pub timers: [Value; TIMERS],
+    default: String,
+    types: HashMap<String, CellType>,
 }
 
-impl Default for Parser {
-    fn default() -> Self {
-        Self {
-            gens: [Value::Gen {}; GENS],
-            timers: [Value::Timer {}; TIMERS],
-        }
-    }
-}
-
-impl Parser {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-}
+#[derive(Resource)]
+pub struct WorldParser(pub Handle<Parser>);
