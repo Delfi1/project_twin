@@ -1,0 +1,6 @@
+// Onion genetic code
+// <NAME>: ACTIVATOR | DEACTIVATOR
+M0: M0
+T0[20]: M0 M1 M2 | M3 M4
+
+// Test
