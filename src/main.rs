@@ -4,6 +4,7 @@ mod cell;
 
 use bevy::prelude::*;
 use cell::*;
+use std::sync::Arc;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
 enum SimulationState {
@@ -18,16 +19,21 @@ fn setup(mut commands: Commands) {
     commands.insert_resource(ClearColor(Color::WHITE));
 }
 
-fn init(mut commands: Commands, hexgrid: Res<HexGrid>) {
+fn init(mut commands: Commands, mut hexgrid: ResMut<HexGrid>) {
     info!("Initializing viewer...");
 
-    commands.spawn((hexgrid.cell(), hexgrid.material(), hexgrid.mesh()));
+    //hexgrid.add_cell(&mut commands, Coord::origin());
+    hexgrid.add_cell(&mut commands, Coord::new(5, 0));
 }
 
 #[derive(Default)]
 pub struct Config {
     asset: Option<Handle<parser::Parser>>,
 }
+
+#[derive(Component)]
+// Точка отчёта симуляции, если сдвинуть её, сдвинется вся сетка
+pub struct Origin;
 
 // Проверка загружен ли конфиг луковицы
 fn config(
@@ -48,14 +54,30 @@ fn config(
     if let Some(parser) = assets.get(&parser) {
         info!("Config loaded...");
 
-        commands.insert_resource(HexGrid::new(parser.clone(), &mut meshes, &mut materials));
+        let parent = commands.spawn((Origin, Transform::IDENTITY)).id();
+        commands.insert_resource(HexGrid::new(
+            parent,
+            Arc::new(parser.clone()),
+            &mut meshes,
+            &mut materials,
+        ));
         state.set(SimulationState::Viewer);
     }
 
     local.asset = Some(parser);
 }
 
-fn tick() {}
+fn tick(
+    hexgrid: Res<HexGrid>,
+    mut cells: Query<Mut<Cell>>,
+    mut origin: Single<Mut<Transform>, With<Origin>>,
+) {
+    for mut _cell in cells.iter_mut() {
+        //cell.tick(&hexgrid);
+    }
+
+    origin.rotate_z(3.14 / 128.);
+}
 
 pub fn main() {
     App::new()

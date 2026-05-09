@@ -2,7 +2,13 @@ pub mod parser;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use std::ops::Mul;
 use std::sync::Arc;
+
+pub const SIZE: f32 = 16.0;
+// Внутренний радиус гексагона, корень из 3
+pub const INNER_RADIUS: f32 = 1.73205;
+pub const THINKNESS: f32 = 4.0;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Coord {
@@ -98,7 +104,7 @@ impl Cell {
         todo!()
     }
 
-    pub fn tick(&mut self, _parser: Arc<parser::Parser>) {
+    pub fn tick(&mut self, grid: &HexGrid) {
         for mut _t in self.timers.iter_mut() {
             todo!();
         }
@@ -107,18 +113,25 @@ impl Cell {
 
 #[derive(Resource)]
 pub struct HexGrid {
-    parser: parser::Parser,
+    pub parser: Arc<parser::Parser>,
+    // Родительский элемент от которого уже отрисовываются все клетки
+    parent: Entity,
+
     mesh: Mesh2d,
     materials: HashMap<String, Handle<ColorMaterial>>,
+
+    grid: HashMap<Coord, Entity>,
 }
 
 impl HexGrid {
     pub fn new(
-        parser: parser::Parser,
+        parent: Entity,
+        parser: Arc<parser::Parser>,
         meshes: &mut Assets<Mesh>,
         color_materials: &mut Assets<ColorMaterial>,
     ) -> Self {
-        let mesh = Mesh2d(meshes.add(RegularPolygon::new(20.0, 6).to_ring(5.0)));
+        let grid = HashMap::new();
+        let mesh = Mesh2d(meshes.add(RegularPolygon::new(SIZE, 6).to_ring(THINKNESS)));
         let mut materials = HashMap::with_capacity(parser.types.capacity());
         for (name, t) in parser.types.iter() {
             materials.insert(name.clone(), color_materials.add(Color::Srgba(t.color)));
@@ -126,22 +139,38 @@ impl HexGrid {
 
         Self {
             parser,
+            parent,
             mesh,
             materials,
+            grid,
         }
     }
 
-    pub fn cell(&self) -> Cell {
-        Cell::default()
+    pub fn add_cell(&mut self, commands: &mut Commands, coords: Coord) {
+        let material = MeshMaterial2d(self.materials.get(&self.parser.default).unwrap().clone());
+        let mesh = self.mesh.clone();
+
+        let pos = Vec3::new(
+            INNER_RADIUS * coords.q as f32 + INNER_RADIUS / 2.0 * coords.r as f32,
+            3. / 2. * coords.r as f32,
+            0.0,
+        )
+        .mul(SIZE);
+
+        let entity = commands
+            .spawn((
+                Cell::default(),
+                mesh,
+                material,
+                Transform::from_translation(pos),
+            ))
+            .id();
+        commands.entity(self.parent).add_child(entity);
+
+        self.grid.insert(coords, entity);
     }
 
-    #[inline]
-    pub fn material(&self) -> MeshMaterial2d<ColorMaterial> {
-        MeshMaterial2d(self.materials.get(&self.parser.default).unwrap().clone())
-    }
-
-    #[inline]
-    pub fn mesh(&self) -> Mesh2d {
-        self.mesh.clone()
+    pub fn iter_neighbors(coords: Coord, range: isize) {
+        todo!();
     }
 }
