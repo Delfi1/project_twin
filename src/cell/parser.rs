@@ -21,67 +21,65 @@ use bevy::{
     asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
+
+use pest::Parser;
+use pest_derive::*;
 use thiserror::Error;
 
-pub const ACTIVATORS: usize = 8;
+pub const CONDITIONS: usize = 8;
 pub const GENS: usize = 16;
 pub const TIMERS: usize = 4;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Conditions {}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub enum ValueType {
-    #[default]
-    None,
-    // У гена есть радиус воспроизводства - количество клеток
-    Gen(u8),
-    // Таймер работает N тиков и пока он работает, его можно использовать в условиях выработки морфогенов
+// Index of condion
+pub enum ConditionType {
+    Morphogen(u8),
     Timer(u8),
-    // Этот тип определяет может ли клетка делится
-    Division,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Value {
-    t: ValueType,
-    // Условия при которых морфоген производится
-    activators: [Conditions; ACTIVATORS],
-    // Условия при которых морфоген НЕ производится
-    deactivators: [Conditions; ACTIVATORS],
+    Division(u8),
+    Type(&'static str),
 }
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CellType {
-    pub gens: [Value; GENS],
-    pub timers: [Value; TIMERS],
-    pub division: Value,
+    // gens, timers, color...
 
+    // Hex color
     pub color: Srgba,
 }
 
+#[derive(Parser)]
+#[grammar = "assets/parser.pest"]
+// Парсер файла конфигурации симуляции
+pub struct ConfigParser;
+
 #[derive(Asset, Clone, Default, TypePath, Debug)]
-pub struct Parser {
+pub struct Config {
     // Тип клетки "по умолчанию"
     pub default: String,
     pub types: HashMap<String, CellType>,
 }
 
 #[derive(Default, TypePath)]
-pub struct ParserLoader;
+pub struct ConfigLoader;
 
 #[non_exhaustive]
 #[derive(Debug, Error)]
-pub enum ParserLoaderError {
+pub enum ConfigLoaderError {
     /// An [IO](std::io) Error
     #[error("Could not load file: {0}")]
     Io(#[from] std::io::Error),
 }
 
-impl AssetLoader for ParserLoader {
-    type Asset = Parser;
+enum ConfigValue<'a> {
+    Activators(Vec<&'a str>),
+    Deactivators(Vec<&'a str>),
+    Color(&'a str),
+    Null,
+}
+
+impl AssetLoader for ConfigLoader {
+    type Asset = Config;
     type Settings = ();
-    type Error = ParserLoaderError;
+    type Error = ConfigLoaderError;
 
     async fn load(
         &self,
@@ -89,17 +87,19 @@ impl AssetLoader for ParserLoader {
         _settings: &(),
         _load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        info!("Loading parser asset...");
-        let mut _parser = Parser::default();
-        let mut bytes = String::with_capacity(1024);
-        reader.read_to_string(&mut bytes).await?;
+        info!("Loading simulation config...");
+        let mut data = String::with_capacity(1024);
+        reader.read_to_string(&mut data).await?;
 
-        _parser.default = "stem".to_string();
+        let mut config = Config::default();
+        //let nodes = ConfigParser::parse(Rule::ident_list, &data);
+
+        config.default = "stem".to_string();
         let mut cell = CellType::default();
         cell.color = Srgba::BLACK;
-        _parser.types.insert(_parser.default.clone(), cell);
+        config.types.insert(config.default.clone(), cell);
 
-        Ok(_parser)
+        Ok(config)
     }
 
     fn extensions(&self) -> &[&str] {

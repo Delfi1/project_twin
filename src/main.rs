@@ -1,5 +1,6 @@
 //! Проект - Цифровой Двойник лука
 //! Симуляция Онтогенеза растения; The influence of water and light on growth;
+mod camera;
 mod cell;
 
 use bevy::prelude::*;
@@ -15,32 +16,44 @@ enum SimulationState {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn((Camera2d, Msaa::Sample4));
+    commands.spawn((Camera2d, camera::Controller));
     commands.insert_resource(ClearColor(Color::WHITE));
+
+    // Скорость работы симуляции
+    commands.insert_resource(Time::<Fixed>::from_seconds(0.25));
 }
 
 fn init(mut commands: Commands, mut hexgrid: ResMut<HexGrid>) {
     info!("Initializing viewer...");
 
     //hexgrid.add_cell(&mut commands, Coord::origin());
-    hexgrid.add_cell(&mut commands, Coord::new(5, 0));
+    let mut coords = Coord::ORIGIN;
+    let mut direction = Direction::None;
+
+    // Test generate hexes
+    let mut i = 0;
+    while i != 12 {
+        coords = coords.neighbor(direction);
+        if hexgrid.get(&coords).is_none() {
+            hexgrid.insert(&mut commands, coords);
+            i += 1;
+        }
+
+        direction = Direction::random();
+    }
 }
 
 #[derive(Default)]
 pub struct Config {
-    asset: Option<Handle<parser::Parser>>,
+    asset: Option<Handle<parser::Config>>,
 }
-
-#[derive(Component)]
-// Точка отчёта симуляции, если сдвинуть её, сдвинется вся сетка
-pub struct Origin;
 
 // Проверка загружен ли конфиг луковицы
 fn config(
     mut commands: Commands,
     mut local: Local<Config>,
     asset_server: Res<AssetServer>,
-    assets: Res<Assets<parser::Parser>>,
+    assets: Res<Assets<parser::Config>>,
     mut state: ResMut<NextState<SimulationState>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -49,22 +62,22 @@ fn config(
         local.asset = Some(asset_server.load("config.sim"));
     }
 
-    let parser = local.asset.take().unwrap();
+    let config = local.asset.take().unwrap();
 
-    if let Some(parser) = assets.get(&parser) {
+    if let Some(config) = assets.get(&config) {
         info!("Config loaded...");
 
         let parent = commands.spawn((Origin, Transform::IDENTITY)).id();
         commands.insert_resource(HexGrid::new(
             parent,
-            Arc::new(parser.clone()),
+            Arc::new(config.clone()),
             &mut meshes,
             &mut materials,
         ));
-        state.set(SimulationState::Viewer);
+        state.set(SimulationState::World);
     }
 
-    local.asset = Some(parser);
+    local.asset = Some(config);
 }
 
 fn tick(
@@ -75,19 +88,21 @@ fn tick(
     for mut _cell in cells.iter_mut() {
         //cell.tick(&hexgrid);
     }
-
-    origin.rotate_z(3.14 / 128.);
 }
 
 pub fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_state(SimulationState::Loading)
-        .init_asset::<parser::Parser>()
-        .init_asset_loader::<parser::ParserLoader>()
-        .add_systems(Startup, setup)
+        .init_asset::<parser::Config>()
+        .init_asset_loader::<parser::ConfigLoader>()
+        .add_systems(PreStartup, setup)
         .add_systems(Update, config.run_if(in_state(SimulationState::Loading)))
-        .add_systems(Update, tick.run_if(in_state(SimulationState::Viewer)))
+        .add_systems(
+            Update,
+            camera::update.run_if(in_state(SimulationState::World)),
+        )
+        .add_systems(FixedUpdate, tick.run_if(in_state(SimulationState::World)))
         .add_systems(OnExit(SimulationState::Loading), init)
         .run();
 }

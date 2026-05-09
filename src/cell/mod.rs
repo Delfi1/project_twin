@@ -10,6 +10,10 @@ pub const SIZE: f32 = 16.0;
 pub const INNER_RADIUS: f32 = 1.73205;
 pub const THINKNESS: f32 = 4.0;
 
+#[derive(Component)]
+// Точка отчёта симуляции, если сдвинуть её, сдвинется вся сетка
+pub struct Origin;
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Coord {
     q: isize,
@@ -18,24 +22,22 @@ pub struct Coord {
 }
 
 impl Coord {
-    pub fn new(q: isize, r: isize) -> Self {
-        Self { q, r, s: -q - r }
-    }
+    pub const ORIGIN: Self = Self::new(0, 0);
 
-    pub fn origin() -> Self {
-        Self { q: 0, r: 0, s: 0 }
+    pub const fn new(q: isize, r: isize) -> Self {
+        Self { q, r, s: -q - r }
     }
 
     pub fn neighbor(&self, dir: Direction) -> Self {
         use Direction::*;
         match dir {
             None => *self,
-            North => Self::new(self.q, self.r - 1),
-            South => Self::new(self.q, self.r + 1),
+            East => Self::new(self.q + 1, self.r),
+            West => Self::new(self.q - 1, self.r),
+            Northwest => Self::new(self.q, self.r - 1),
+            Southeast => Self::new(self.q, self.r + 1),
             Northeast => Self::new(self.q + 1, self.r - 1),
             Southwest => Self::new(self.q - 1, self.r + 1),
-            Northwest => Self::new(self.q - 1, self.r),
-            Southeast => Self::new(self.q + 1, self.r),
         }
     }
 
@@ -62,8 +64,8 @@ impl Coord {
 pub enum Direction {
     #[default]
     None,
-    North,
-    South,
+    East,
+    West,
     Northeast,
     Southwest,
     Northwest,
@@ -71,54 +73,37 @@ pub enum Direction {
 }
 
 impl Direction {
-    pub const NEIGHBORS: [Direction; 6] = [
-        Direction::North,
-        Direction::Northeast,
-        Direction::Southeast,
-        Direction::South,
-        Direction::Southwest,
-        Direction::Northwest,
+    pub const NEIGHBORS: [Self; 6] = [
+        Self::East,
+        Self::Northeast,
+        Self::Southeast,
+        Self::West,
+        Self::Southwest,
+        Self::Northwest,
     ];
-}
 
-pub struct Timer {
-    index: usize,
-    current: u8,
-}
-
-impl Timer {
-    pub fn tick(&mut self) -> bool {
-        self.current -= 1;
-        self.current == 0
+    pub fn random() -> Self {
+        Self::NEIGHBORS[rand::random_range(0..6)]
     }
 }
 
 #[derive(Component, Default)]
-pub struct Cell {
-    gens: [parser::Value; parser::GENS],
-    timers: [Option<Timer>; parser::TIMERS],
-}
+pub struct Cell {}
 
 impl Cell {
-    pub fn new(_parser: &parser::Parser) -> Self {
+    pub fn new(_config: &parser::Config) -> Self {
         todo!()
-    }
-
-    pub fn tick(&mut self, grid: &HexGrid) {
-        for mut _t in self.timers.iter_mut() {
-            todo!();
-        }
     }
 }
 
 #[derive(Resource)]
 pub struct HexGrid {
-    pub parser: Arc<parser::Parser>,
+    pub parser: Arc<parser::Config>,
     // Родительский элемент от которого уже отрисовываются все клетки
     parent: Entity,
 
     mesh: Mesh2d,
-    materials: HashMap<String, Handle<ColorMaterial>>,
+    materials: HashMap<String, MeshMaterial2d<ColorMaterial>>,
 
     grid: HashMap<Coord, Entity>,
 }
@@ -126,7 +111,7 @@ pub struct HexGrid {
 impl HexGrid {
     pub fn new(
         parent: Entity,
-        parser: Arc<parser::Parser>,
+        parser: Arc<parser::Config>,
         meshes: &mut Assets<Mesh>,
         color_materials: &mut Assets<ColorMaterial>,
     ) -> Self {
@@ -134,7 +119,8 @@ impl HexGrid {
         let mesh = Mesh2d(meshes.add(RegularPolygon::new(SIZE, 6).to_ring(THINKNESS)));
         let mut materials = HashMap::with_capacity(parser.types.capacity());
         for (name, t) in parser.types.iter() {
-            materials.insert(name.clone(), color_materials.add(Color::Srgba(t.color)));
+            let material = color_materials.add(Color::Srgba(t.color));
+            materials.insert(name.clone(), MeshMaterial2d(material));
         }
 
         Self {
@@ -146,8 +132,12 @@ impl HexGrid {
         }
     }
 
-    pub fn add_cell(&mut self, commands: &mut Commands, coords: Coord) {
-        let material = MeshMaterial2d(self.materials.get(&self.parser.default).unwrap().clone());
+    pub fn get(&self, coords: &Coord) -> Option<&Entity> {
+        self.grid.get(coords)
+    }
+
+    pub fn insert(&mut self, commands: &mut Commands, coords: Coord) {
+        let material = self.materials.get(&self.parser.default).unwrap().clone();
         let mesh = self.mesh.clone();
 
         let pos = Vec3::new(
@@ -162,7 +152,7 @@ impl HexGrid {
                 Cell::default(),
                 mesh,
                 material,
-                Transform::from_translation(pos),
+                Transform::from_translation(pos).with_scale(Vec3::splat(0.9)),
             ))
             .id();
         commands.entity(self.parent).add_child(entity);
