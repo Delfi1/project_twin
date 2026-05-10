@@ -1,6 +1,29 @@
-alpha = { 'a'..'z' | 'A'..'Z' }
-digit = { '0'..'9' }
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
-ident = { (alpha | digit)+ }
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
-ident_list = _{ !digit ~ ident ~ (" " ~ ident)+ }
+char = {
+    !("\"" | "\\") ~ ANY
+  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+}
+
+value = @{ char* }
+
+gen  = { value ~ ":" ~ activator* ~ deactivator* }
+gens = { gen ~ (NEWLINE ~ cell)* }
+
+cell  = { "[[" ~ value ~ "]]" ~ gens ~ "[[" | EOI }
+array = { cell ~ (NEWLINE ~ cell)* }
+
+activator = {
+    "[" ~ "]"
+  | "[" ~ value ~ ("," ~ value)* ~ "]"
+}
+
+deactivator = {
+    "{" ~ "}"
+  | "{" ~ value ~ ("," ~ value)* ~ "}"
+}
+
+config = _{ SOI ~ array ~ EOI }

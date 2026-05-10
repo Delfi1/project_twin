@@ -35,7 +35,10 @@ pub enum ConditionType {
     Morphogen(u8),
     Timer(u8),
     Division(u8),
+
+    // Functions <- simulation core
     Type(&'static str),
+    Neighbors(u8),
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -70,10 +73,10 @@ pub enum ConfigLoaderError {
 }
 
 enum ConfigValue<'a> {
+    Value(u8),
     Activators(Vec<&'a str>),
     Deactivators(Vec<&'a str>),
     Color(&'a str),
-    Null,
 }
 
 impl AssetLoader for ConfigLoader {
@@ -92,12 +95,19 @@ impl AssetLoader for ConfigLoader {
         reader.read_to_string(&mut data).await?;
 
         let mut config = Config::default();
-        //let nodes = ConfigParser::parse(Rule::ident_list, &data);
 
-        config.default = "stem".to_string();
+        // Todo: remove default cell type
         let mut cell = CellType::default();
+        config.default = "Stem".to_string();
         cell.color = Srgba::BLACK;
         config.types.insert(config.default.clone(), cell);
+
+        //for pair in ConfigParser::parse(Rule::cell_type, &data) {
+        //    let mut _cell = CellType::default();
+        //
+        //    println!("Rule: {:?}", pair.as_rule());
+        //    println!("Span: {:?}", pair.as_span());
+        //}
 
         Ok(config)
     }
