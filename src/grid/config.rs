@@ -1,22 +1,4 @@
-//! Парсер генетической информации из файла gen.sim
-// Сигнатура файла:
-// --------------------------------------
-// Тип:
-//     <Ген>: [Условие активации](Радиус) {Отключаемые морфогены}
-// --------------------------------------
-// Пример:
-// stem:
-//     M0: M0
-//     T0: M0 M1 M2 | M3 M4
-// --------------------------------------
-// Индекс - первое число гена
-//
-// Типы генов:
-// M(index) <- Морфоген
-// T(index) <- Таймер. Ожидает N тиков перед активацией, количество тиков задаётся в активирующем гене отдельно
-
 use bevy::asset::AsyncReadExt;
-use bevy::platform::collections::HashMap;
 use bevy::{
     asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
@@ -26,26 +8,52 @@ use pest::Parser;
 use pest_derive::*;
 use thiserror::Error;
 
-pub const CONDITIONS: usize = 8;
 pub const GENS: usize = 16;
 pub const TIMERS: usize = 4;
+pub const CONDITIONS: usize = 8;
+pub const TYPES: usize = 8;
 
-// Index of condion
-pub enum ConditionType {
+pub enum ConditionValue {
+    // Morphogen and timer id
     Morphogen(u8),
     Timer(u8),
-    Division(u8),
 
-    // Functions <- simulation core
-    Type(&'static str),
+    // Count of neighbors
     Neighbors(u8),
+    // Cell type
+    Type(&'static str),
+}
+
+// Значение которое присваивается клетке
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Condition {
+    activators: [&'static str; CONDITIONS],
+    deactivators: [&'static str; CONDITIONS],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ValueType {
+    // Расстояние работы морфогена
+    Morphogen(u8),
+    // Время отсчёта таймера
+    Timer(u8),
+    Change(&'static str),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Value {
+    _type: ValueType,
+    condition: Condition,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CellType {
-    // gens, timers, color...
+    pub gens: [Option<Value>; GENS],
+    pub timers: [Option<Value>; TIMERS],
+    pub changes: [Option<Value>; TYPES],
 
-    // Hex color
+    pub division: Condition,
+    // gens, timers, color...
     pub color: Srgba,
 }
 
@@ -58,7 +66,7 @@ pub struct ConfigParser;
 pub struct Config {
     // Тип клетки "по умолчанию"
     pub default: String,
-    pub types: HashMap<String, CellType>,
+    pub types: Vec<CellType>,
 }
 
 #[derive(Default, TypePath)]
@@ -70,13 +78,8 @@ pub enum ConfigLoaderError {
     /// An [IO](std::io) Error
     #[error("Could not load file: {0}")]
     Io(#[from] std::io::Error),
-}
-
-enum ConfigValue<'a> {
-    Value(u8),
-    Activators(Vec<&'a str>),
-    Deactivators(Vec<&'a str>),
-    Color(&'a str),
+    #[error("Config parse error: {0}")]
+    Parse(#[from] pest::error::Error<Rule>),
 }
 
 impl AssetLoader for ConfigLoader {
@@ -100,14 +103,14 @@ impl AssetLoader for ConfigLoader {
         let mut cell = CellType::default();
         config.default = "Stem".to_string();
         cell.color = Srgba::BLACK;
-        config.types.insert(config.default.clone(), cell);
+        config.types.push(cell);
 
-        //for pair in ConfigParser::parse(Rule::cell_type, &data) {
-        //    let mut _cell = CellType::default();
-        //
-        //    println!("Rule: {:?}", pair.as_rule());
-        //    println!("Span: {:?}", pair.as_span());
-        //}
+        for pair in ConfigParser::parse(Rule::config, &data)? {
+            let mut _cell = CellType::default();
+
+            println!("Rule: {:?}", pair.as_rule());
+            println!("Span: {:?}", pair.as_span());
+        }
 
         Ok(config)
     }

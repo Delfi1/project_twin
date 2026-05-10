@@ -8,22 +8,19 @@ char = {
   | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
 }
 
-value = @{ char* }
+string = @{ char* }
 
-gen  = { value ~ ":" ~ activator* ~ deactivator* }
-gens = { gen ~ (NEWLINE ~ cell)* }
-
-cell  = { "[[" ~ value ~ "]]" ~ gens ~ "[[" | EOI }
-array = { cell ~ (NEWLINE ~ cell)* }
-
-activator = {
-    "[" ~ "]"
-  | "[" ~ value ~ ("," ~ value)* ~ "]"
+activators = {
+    "[" ~ "]" |
+    "[" ~ string ~ (" " ~ string)* ~ "]"
 }
 
-deactivator = {
-    "{" ~ "}"
-  | "{" ~ value ~ ("," ~ value)* ~ "}"
+deactivators = {
+    "{" ~ "}" |
+    "{" ~ string ~ ("," ~ string)* ~ "}"
 }
 
-config = _{ SOI ~ array ~ EOI }
+gen = { string ~ ":" ~ activators ~ deactivators ~ ";" }
+cell = { "[[" ~ string ~ "]]" ~ gen* ~ ("[[" | EOI) }
+
+config = _{ SOI ~ cell* }
