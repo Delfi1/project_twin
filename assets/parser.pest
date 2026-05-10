@@ -1,26 +1,30 @@
-WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-
 COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
-char = {
-    !("\"" | "\\") ~ ANY
-  | "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
-  | "\\" ~ ("u" ~ ASCII_HEX_DIGIT{4})
+WHITESPACE = _{ " " }
+
+char = { ASCII_ALPHANUMERIC | "." | "_" | "/" | "!" }
+
+name  = { char+ }
+value = { char* }
+
+identity  = { value ~ "(" ~ value ~ ")" }
+condition = { (value ~ identity) | value }
+
+activator = {
+    "[" ~ "]"
+  | "[" ~ condition ~ ("," ~ condition)* ~ "]"
 }
 
-string = @{ char* }
-
-activators = {
-    "[" ~ "]" |
-    "[" ~ string ~ (" " ~ string)* ~ "]"
+deactivator = {
+    "{" ~ "}"
+  | "{" ~ condition ~ ("," ~ condition)* ~ "}"
 }
 
-deactivators = {
-    "{" ~ "}" |
-    "{" ~ string ~ ("," ~ string)* ~ "}"
+color = { "#" ~ value }
+
+section  = { "<" ~ name ~ ">" }
+property = { ((name ~ identity) | name) ~ ":" ~ (color | (activator* ~ deactivator*)) }
+
+file = {
+    SOI ~ ((section | property)? ~ NEWLINE)* ~ EOI
 }
-
-gen = { string ~ ":" ~ activators ~ deactivators ~ ";" }
-cell = { "[[" ~ string ~ "]]" ~ gen* ~ ("[[" | EOI) }
-
-config = _{ SOI ~ cell* }

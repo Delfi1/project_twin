@@ -105,11 +105,15 @@ impl AssetLoader for ConfigLoader {
         cell.color = Srgba::BLACK;
         config.types.push(cell);
 
-        for pair in ConfigParser::parse(Rule::config, &data)? {
+        for pair in ConfigParser::parse(Rule::file, &data)? {
             let mut _cell = CellType::default();
 
             println!("Rule: {:?}", pair.as_rule());
             println!("Span: {:?}", pair.as_span());
+            for inner in pair.into_inner() {
+                println!("Rule: {:?}", inner.as_rule());
+                println!("Span: {:?}", inner.as_span());
+            }
         }
 
         Ok(config)
