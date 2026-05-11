@@ -17,26 +17,34 @@ pub trait Coords: Clone + Copy + std::hash::Hash + Eq + PartialEq {
     fn neighbor(&self, direction: Self::Dir) -> Self;
 }
 
-pub trait Cell: Component + Default {
+pub trait Cell: Clone + Component + Default {
     // todo: simulation core operations with cells
     //fn tick();
+
+    //fn gen(&self) -> bool;
+    //fn can_division(&self) -> bool;
+
+    // Is timer running
+    fn is_running(&self, timer: usize) -> bool;
 }
 
 /// Основной абстрактный класс для работы с сеткой
 pub trait Grid: Resource {
     type Cell: Cell;
     type Coords: Coords;
+    type Materials: Resource + FromWorld;
     type Controller: Controller;
 
-    fn new(
-        parent: Entity,
-        config: Arc<Config>,
-        meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<ColorMaterial>,
-    ) -> Self;
+    fn new(parent: Entity, config: Arc<Config>) -> Self;
 
     /// Добавить клетку в сетку по координатам
-    fn insert(&mut self, commands: &mut Commands, coords: Self::Coords, cell: Self::Cell);
+    fn insert(
+        &mut self,
+        commands: &mut Commands,
+        materials: &Self::Materials,
+        coords: Self::Coords,
+        cell: Self::Cell,
+    );
 
     /// Получить клетку по координатам
     fn get(&self, coords: &Self::Coords) -> Option<&Entity>;
@@ -48,7 +56,7 @@ pub trait Grid: Resource {
     fn on_setup(commands: Commands);
 
     /// Система которая подгружает сетку из конфигурации
-    fn on_load(grid: ResMut<Self>, commands: Commands);
+    fn on_load(grid: ResMut<Self>, materials: Res<Self::Materials>, commands: Commands);
 
     /// Обновление сетки через Bevy
     fn on_tick(grid: Res<Self>);

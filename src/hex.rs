@@ -78,10 +78,22 @@ pub const SIZE: f32 = 16.0;
 pub const INNER_RADIUS: f32 = 1.73205;
 pub const THINKNESS: f32 = 4.0;
 
-#[derive(Component, Default)]
-pub struct HexCell;
+#[derive(Component, Default, Clone)]
+pub struct HexCell {
+    pub gens: [Option<Morphogen>; GENS],
 
-impl Cell for HexCell {}
+    // if timer == 0 is_running => false
+    // Текущие таймеры
+    pub timers: [u8; TIMERS],
+    pub changes: [Option<Change>; TYPES],
+}
+
+impl Cell for HexCell {
+    #[inline]
+    fn is_running(&self, timer: usize) -> bool {
+        self.timers[timer] != 0
+    }
+}
 
 #[derive(Component)]
 pub struct HexController;
@@ -131,12 +143,35 @@ impl Controller for HexController {
 }
 
 #[derive(Resource)]
+pub struct HexMaterials {
+    pub mesh: Mesh2d,
+    pub materials: HashMap<String, MeshMaterial2d<ColorMaterial>>,
+}
+
+impl FromWorld for HexMaterials {
+    fn from_world(world: &mut World) -> Self {
+        let mut meshes = world.get_resource_mut::<Assets<Mesh>>().unwrap();
+        let mesh = Mesh2d(meshes.add(RegularPolygon::new(SIZE, 6).to_ring(THINKNESS)));
+
+        let grid = world.get_resource::<HexGrid>().unwrap();
+        let config = grid.config.clone();
+
+        let mut color_materials = world.get_resource_mut::<Assets<ColorMaterial>>().unwrap();
+        let mut materials = HashMap::with_capacity(config.types.capacity());
+        for (name, t) in config.types.iter() {
+            let material = color_materials.add(Color::Srgba(t.color));
+            materials.insert(name.clone(), MeshMaterial2d(material));
+        }
+
+        Self { mesh, materials }
+    }
+}
+
+#[derive(Resource)]
 pub struct HexGrid {
     pub config: Arc<Config>,
     // Родительский элемент от которого уже отрисовываются все клетки
     parent: Entity,
-    mesh: Mesh2d,
-    materials: Vec<MeshMaterial2d<ColorMaterial>>,
 
     grid: HashMap<HexCoords, Entity>,
 }
@@ -145,34 +180,26 @@ impl Grid for HexGrid {
     type Cell = HexCell;
     type Coords = HexCoords;
     type Controller = HexController;
+    type Materials = HexMaterials;
 
-    fn new(
-        parent: Entity,
-        config: Arc<Config>,
-        meshes: &mut Assets<Mesh>,
-        color_materials: &mut Assets<ColorMaterial>,
-    ) -> Self {
+    fn new(parent: Entity, config: Arc<Config>) -> Self {
         let grid = HashMap::new();
-
-        let mesh = Mesh2d(meshes.add(RegularPolygon::new(SIZE, 6).to_ring(THINKNESS)));
-        let mut materials = Vec::with_capacity(config.types.capacity());
-        for t in config.types.iter() {
-            let material = color_materials.add(Color::Srgba(t.color));
-            materials.push(MeshMaterial2d(material));
-        }
 
         Self {
             config,
             parent,
-            mesh,
-            materials,
             grid,
         }
     }
 
-    fn insert(&mut self, commands: &mut Commands, coords: Self::Coords, cell: Self::Cell) {
-        let material = self.materials[0].clone();
-        let mesh = self.mesh.clone();
+    fn insert(
+        &mut self,
+        commands: &mut Commands,
+        materials: &Self::Materials,
+        coords: Self::Coords,
+        cell: Self::Cell,
+    ) {
+        let material = materials.materials.get(&self.config.default).unwrap();
 
         let pos = Vec3::new(
             INNER_RADIUS * coords.q as f32 + INNER_RADIUS / 2.0 * coords.r as f32,
@@ -184,8 +211,8 @@ impl Grid for HexGrid {
         let entity = commands
             .spawn((
                 cell,
-                mesh,
-                material,
+                materials.mesh.clone(),
+                material.clone(),
                 Transform::from_translation(pos).with_scale(Vec3::splat(0.9)),
             ))
             .id();
@@ -202,24 +229,24 @@ impl Grid for HexGrid {
         todo!()
     }
 
-    /// 2д мир с белым фоном
+    /// Двумерный мир с серым фоном
     fn on_setup(mut commands: Commands) {
         commands.spawn(Camera2d);
-        commands.insert_resource(ClearColor(Color::WHITE));
+        commands.insert_resource(ClearColor(Color::srgb_u8(43, 43, 43)));
     }
 
-    fn on_load(mut grid: ResMut<Self>, mut commands: Commands) {
+    fn on_load(mut grid: ResMut<Self>, materials: Res<Self::Materials>, mut commands: Commands) {
         info!("Initializing viewer...");
 
         let mut coords = Self::Coords::ORIGIN;
         let mut direction = HexDirection::None;
 
-        // Test generate hexes
+        // Тестовая генерация хексов
         let mut i = 0;
         while i != 12 {
             coords = coords.neighbor(direction);
             if grid.get(&coords).is_none() {
-                grid.insert(&mut commands, coords, Self::Cell::default());
+                grid.insert(&mut commands, &materials, coords, Self::Cell::default());
                 i += 1;
             }
 
@@ -227,5 +254,5 @@ impl Grid for HexGrid {
         }
     }
 
-    fn on_tick(grid: Res<Self>) {}
+    fn on_tick(_grid: Res<Self>) {}
 }

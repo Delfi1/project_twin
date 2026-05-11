@@ -33,8 +33,6 @@ fn load_config(
     asset_server: Res<AssetServer>,
     assets: Res<Assets<grid::Config>>,
     mut state: ResMut<NextState<SimulationState>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if local.asset.is_none() {
         local.asset = Some(asset_server.load("config.sim"));
@@ -46,12 +44,8 @@ fn load_config(
         info!("Config loaded...");
 
         let parent = commands.spawn((Origin, Transform::IDENTITY)).id();
-        commands.insert_resource(Simulation::new(
-            parent,
-            Arc::new(config),
-            &mut meshes,
-            &mut materials,
-        ));
+        commands.insert_resource(Simulation::new(parent, Arc::new(config)));
+        commands.init_resource::<<Simulation as Grid>::Materials>();
         // On config load grid creating
         state.set(SimulationState::World);
     }
@@ -71,7 +65,14 @@ pub fn main() {
             Update,
             load_config.run_if(in_state(SimulationState::Loading)),
         )
-        .add_systems(Update, <Simulation as Grid>::Controller::update)
+        .add_systems(
+            Update,
+            (
+                Simulation::on_tick,
+                <Simulation as Grid>::Controller::update,
+            )
+                .run_if(in_state(SimulationState::World)),
+        )
         .add_systems(OnExit(SimulationState::Loading), Simulation::on_load)
         .run();
 }

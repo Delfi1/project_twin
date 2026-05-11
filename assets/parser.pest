@@ -2,13 +2,23 @@ COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE }
 
 WHITESPACE = _{ " " }
 
-char = { ASCII_ALPHANUMERIC | "." | "_" | "/" | "!" }
+char     = { ASCII_ALPHANUMERIC | "." | "_" | "/" | "!" }
+int_char = { ASCII_DIGIT }
 
-name  = { char+ }
-value = { char* }
+name   = { char+ }
+string = { char* }
+index  = { int_char* }
 
-identity  = { value ~ "(" ~ value ~ ")" }
-condition = { (value ~ identity) | value }
+value  = { "(" ~ string ~ ")" }
+gen    = { "M" ~ index }
+timer  = { "T" ~ index }
+change = { "Change" }
+
+is_type   = { "Type" ~ value }
+neighbors = { "n" ~ value }
+
+negation  = { "!" | "" }
+condition = { negation ~ (gen | is_type | timer | neighbors | "D") }
 
 activator = {
     "[" ~ "]"
@@ -20,11 +30,9 @@ deactivator = {
   | "{" ~ condition ~ ("," ~ condition)* ~ "}"
 }
 
-color = { "#" ~ value }
-
 section  = { "<" ~ name ~ ">" }
-property = { ((name ~ identity) | name) ~ ":" ~ (color | (activator* ~ deactivator*)) }
+property = { (gen | timer | change) ~ value ~ ":" ~ activator* ~ deactivator* }
+division = { "D" ~ ":" ~ activator* ~ deactivator* }
+color    = { "Color" ~ ":" ~ "#" ~ string }
 
-file = {
-    SOI ~ ((section | property)? ~ NEWLINE)* ~ EOI
-}
+file = { SOI ~ ((section | property | division | color)? ~ NEWLINE)* ~ EOI }

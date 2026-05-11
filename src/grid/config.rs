@@ -1,4 +1,5 @@
 use bevy::asset::AsyncReadExt;
+use bevy::platform::collections::HashMap;
 use bevy::{
     asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
@@ -10,51 +11,59 @@ use thiserror::Error;
 
 pub const GENS: usize = 16;
 pub const TIMERS: usize = 4;
-pub const CONDITIONS: usize = 8;
 pub const TYPES: usize = 8;
 
+#[derive(Debug, Clone, Copy)]
+// Ген с радиусом распространения морфогена
+pub struct Morphogen(u8);
+
+#[derive(Debug, Clone, Copy)]
+// Ген с установленным таймером
+pub struct Timer(u8);
+
+// Ген который отвечает за дифференцировку клетки
+#[derive(Debug, Clone)]
+pub struct Change(String);
+
+#[derive(Debug, Clone)]
 pub enum ConditionValue {
-    // Morphogen and timer id
-    Morphogen(u8),
-    Timer(u8),
-
-    // Count of neighbors
+    IsType(String),
     Neighbors(u8),
-    // Cell type
-    Type(&'static str),
+    Division,
 }
 
-// Значение которое присваивается клетке
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
+pub enum ConditionType {
+    Default(ConditionValue),
+    Negative(ConditionValue),
+}
+
+#[derive(Debug, Clone)]
 pub struct Condition {
-    activators: [&'static str; CONDITIONS],
-    deactivators: [&'static str; CONDITIONS],
+    activators: [ConditionType; 32],
+    deactivators: [ConditionType; 32],
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ValueType {
-    // Расстояние работы морфогена
-    Morphogen(u8),
-    // Время отсчёта таймера
-    Timer(u8),
-    Change(&'static str),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Value {
-    _type: ValueType,
-    condition: Condition,
-}
-
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone)]
 pub struct CellType {
-    pub gens: [Option<Value>; GENS],
-    pub timers: [Option<Value>; TIMERS],
-    pub changes: [Option<Value>; TYPES],
+    pub name: String,
+    pub gens: [Option<Morphogen>; GENS],
+    pub timers: HashMap<usize, Condition>,
+    // Условия дифференцировки клетки на другой тип
+    pub changes: HashMap<String, Condition>,
 
-    pub division: Condition,
     // gens, timers, color...
     pub color: Srgba,
+}
+
+impl CellType {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            color: Srgba::BLACK,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -66,7 +75,7 @@ pub struct ConfigParser;
 pub struct Config {
     // Тип клетки "по умолчанию"
     pub default: String,
-    pub types: Vec<CellType>,
+    pub types: HashMap<String, CellType>,
 }
 
 #[derive(Default, TypePath)]
@@ -97,22 +106,47 @@ impl AssetLoader for ConfigLoader {
         let mut data = String::with_capacity(1024);
         reader.read_to_string(&mut data).await?;
 
+        // Todo: remove default cell type
+        let file = ConfigParser::parse(Rule::file, &data)?.next().unwrap();
+
         let mut config = Config::default();
 
-        // Todo: remove default cell type
-        let mut cell = CellType::default();
-        config.default = "Stem".to_string();
-        cell.color = Srgba::BLACK;
-        config.types.push(cell);
+        let mut cell = None;
+        for inner in file.into_inner() {
+            match inner.as_rule() {
+                Rule::section => {
+                    let name = inner.into_inner().next().unwrap().as_str();
 
-        for pair in ConfigParser::parse(Rule::file, &data)? {
-            let mut _cell = CellType::default();
+                    if cell.is_some() {
+                        let value: CellType = cell.take().unwrap();
+                        config.types.insert(value.name.clone(), value);
+                    } else {
+                        config.default = name.to_string();
+                    }
 
-            println!("Rule: {:?}", pair.as_rule());
-            println!("Span: {:?}", pair.as_span());
-            for inner in pair.into_inner() {
-                println!("Rule: {:?}", inner.as_rule());
-                println!("Span: {:?}", inner.as_span());
+                    cell = Some(CellType::new(name));
+                }
+                Rule::property => {
+                    if cell.is_none() {
+                        continue;
+                    }
+                    let mut _value = cell.take().unwrap();
+
+                    //println!("Cell {}: {:?}", value.name, inner.into_inner());
+
+                    cell = Some(_value);
+                }
+                Rule::color => {
+                    if cell.is_none() {
+                        continue;
+                    }
+
+                    let mut value = cell.take().unwrap();
+                    value.color = Srgba::hex(inner.into_inner().as_str()).unwrap_or(Srgba::BLACK);
+                    cell = Some(value);
+                }
+                Rule::division => {}
+                _ => (),
             }
         }
 
