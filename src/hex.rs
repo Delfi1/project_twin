@@ -46,9 +46,9 @@ pub struct HexCoords {
 }
 
 impl HexCoords {
-    pub const ORIGIN: Self = Self::cubic(0, 0);
+    pub const ORIGIN: Self = Self::new(0, 0);
 
-    pub const fn cubic(q: isize, r: isize) -> Self {
+    pub const fn new(q: isize, r: isize) -> Self {
         Self { q, r, s: -q - r }
     }
 }
@@ -56,19 +56,15 @@ impl HexCoords {
 impl Coords for HexCoords {
     type Dir = HexDirection;
 
-    fn new(q: isize, r: isize, s: isize) -> Self {
-        Self { q, r, s }
-    }
-
-    fn neighbor(&self, dir: Self::Dir) -> Self {
+    fn neighbor(&self, dir: &Self::Dir) -> Self {
         match dir {
             Self::Dir::None => *self,
-            Self::Dir::East => Self::cubic(self.q + 1, self.r),
-            Self::Dir::West => Self::cubic(self.q - 1, self.r),
-            Self::Dir::Northwest => Self::cubic(self.q, self.r - 1),
-            Self::Dir::Southeast => Self::cubic(self.q, self.r + 1),
-            Self::Dir::Northeast => Self::cubic(self.q + 1, self.r - 1),
-            Self::Dir::Southwest => Self::cubic(self.q - 1, self.r + 1),
+            Self::Dir::East => Self::new(self.q + 1, self.r),
+            Self::Dir::West => Self::new(self.q - 1, self.r),
+            Self::Dir::Northwest => Self::new(self.q, self.r - 1),
+            Self::Dir::Southeast => Self::new(self.q, self.r + 1),
+            Self::Dir::Northeast => Self::new(self.q + 1, self.r - 1),
+            Self::Dir::Southwest => Self::new(self.q - 1, self.r + 1),
         }
     }
 }
@@ -78,17 +74,37 @@ pub const SIZE: f32 = 16.0;
 pub const INNER_RADIUS: f32 = 1.73205;
 pub const THINKNESS: f32 = 4.0;
 
-#[derive(Component, Default, Clone)]
+#[derive(Component, Clone)]
 pub struct HexCell {
-    pub gens: [Option<Morphogen>; GENS],
-
-    // if timer == 0 is_running => false
-    // Текущие таймеры
+    pub _type: Arc<CellType>,
+    pub gens: [bool; GENS],
     pub timers: [u8; TIMERS],
-    pub changes: [Option<Change>; TYPES],
 }
 
 impl Cell for HexCell {
+    // M0 is always active on init
+    fn new(_type: Arc<CellType>) -> Self {
+        let timers = [0; TIMERS];
+        let mut gens = [false; GENS];
+        gens[0] = true;
+
+        Self {
+            _type,
+            gens,
+            timers,
+        }
+    }
+
+    #[inline]
+    fn cell_type(&self) -> Arc<CellType> {
+        self._type.clone()
+    }
+
+    #[inline]
+    fn is_active(&self, index: usize) -> bool {
+        self.gens[index]
+    }
+
     #[inline]
     fn is_running(&self, timer: usize) -> bool {
         self.timers[timer] != 0
@@ -105,7 +121,7 @@ impl Controller for HexController {
         mut scroll: Local<f32>,
         kbd: Res<ButtonInput<KeyCode>>,
         mut scroll_msg: MessageReader<bevy::input::mouse::MouseWheel>,
-        camera: Single<(Mut<Transform>, Mut<Projection>), With<Camera>>,
+        camera: Single<(Mut<Transform>, Mut<Projection>), With<Self>>,
     ) {
         let (mut transform, projection) = camera.into_inner();
 
@@ -167,6 +183,9 @@ impl FromWorld for HexMaterials {
     }
 }
 
+#[derive(Default, Component)]
+pub struct HexOrigin;
+
 #[derive(Resource)]
 pub struct HexGrid {
     pub config: Arc<Config>,
@@ -181,6 +200,7 @@ impl Grid for HexGrid {
     type Coords = HexCoords;
     type Controller = HexController;
     type Materials = HexMaterials;
+    type Origin = HexOrigin;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self {
         let grid = HashMap::new();
@@ -197,7 +217,7 @@ impl Grid for HexGrid {
         commands: &mut Commands,
         materials: &Self::Materials,
         coords: Self::Coords,
-        cell: Self::Cell,
+        cell_type: Arc<CellType>,
     ) {
         let material = materials.materials.get(&self.config.default).unwrap();
 
@@ -208,6 +228,7 @@ impl Grid for HexGrid {
         )
         .mul(SIZE);
 
+        let cell = HexCell::new(cell_type);
         let entity = commands
             .spawn((
                 cell,
@@ -225,18 +246,14 @@ impl Grid for HexGrid {
         self.grid.get(coords)
     }
 
-    fn neighbors(&self, _coords: Self::Coords) -> u8 {
-        todo!()
-    }
-
     /// Двумерный мир с серым фоном
     fn on_setup(mut commands: Commands) {
-        commands.spawn(Camera2d);
+        commands.spawn((Camera2d, HexController));
         commands.insert_resource(ClearColor(Color::srgb_u8(43, 43, 43)));
     }
 
     fn on_load(mut grid: ResMut<Self>, materials: Res<Self::Materials>, mut commands: Commands) {
-        info!("Initializing viewer...");
+        info!("Initializing grid...");
 
         let mut coords = Self::Coords::ORIGIN;
         let mut direction = HexDirection::None;
@@ -244,9 +261,10 @@ impl Grid for HexGrid {
         // Тестовая генерация хексов
         let mut i = 0;
         while i != 12 {
-            coords = coords.neighbor(direction);
+            coords = coords.neighbor(&direction);
+            let _type = grid.config.types.get(&grid.config.default).unwrap().clone();
             if grid.get(&coords).is_none() {
-                grid.insert(&mut commands, &materials, coords, Self::Cell::default());
+                grid.insert(&mut commands, &materials, coords, _type);
                 i += 1;
             }
 
@@ -254,5 +272,9 @@ impl Grid for HexGrid {
         }
     }
 
-    fn on_tick(_grid: Res<Self>) {}
+    fn select(camera: Single<(Mut<Transform>, Mut<Projection>), With<Self::Controller>>) {
+        todo!()
+    }
+
+    fn on_tick(mut grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>) {}
 }

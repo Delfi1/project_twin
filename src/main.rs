@@ -4,7 +4,10 @@ mod grid;
 mod hex;
 
 use crate::grid::*;
-use bevy::prelude::*;
+use bevy::{
+    prelude::*,
+    window::{PrimaryWindow, WindowMode},
+};
 use std::sync::Arc;
 
 // Set current simulation type as Hex
@@ -17,9 +20,6 @@ enum SimulationState {
     World,
     _Viewer,
 }
-
-#[derive(Component)]
-pub struct Origin;
 
 #[derive(Default)]
 pub struct ConfigAsset {
@@ -43,7 +43,9 @@ fn load_config(
     if let Some(config) = assets.get(&config).cloned() {
         info!("Config loaded...");
 
-        let parent = commands.spawn((Origin, Transform::IDENTITY)).id();
+        let parent = commands
+            .spawn((<Simulation as Grid>::Origin::default(), Transform::IDENTITY))
+            .id();
         commands.insert_resource(Simulation::new(parent, Arc::new(config)));
         commands.init_resource::<<Simulation as Grid>::Materials>();
         // On config load grid creating
@@ -51,6 +53,18 @@ fn load_config(
     }
 
     local.asset = Some(config);
+}
+
+fn switch_fullscreen(
+    kbd: Res<ButtonInput<KeyCode>>,
+    mut window: Single<Mut<Window>, With<PrimaryWindow>>,
+) {
+    if kbd.just_pressed(KeyCode::F11) {
+        window.mode = match window.mode {
+            WindowMode::Windowed => WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+            _ => WindowMode::Windowed,
+        };
+    }
 }
 
 pub fn main() {
@@ -67,12 +81,14 @@ pub fn main() {
         )
         .add_systems(
             Update,
-            (
-                Simulation::on_tick,
-                <Simulation as Grid>::Controller::update,
-            )
-                .run_if(in_state(SimulationState::World)),
+            Simulation::on_tick.run_if(in_state(SimulationState::World)),
+        )
+        .add_systems(
+            Update,
+            <Simulation as Grid>::Controller::update
+                .run_if(not(in_state(SimulationState::Loading))),
         )
         .add_systems(OnExit(SimulationState::Loading), Simulation::on_load)
+        .add_systems(Update, switch_fullscreen)
         .run();
 }

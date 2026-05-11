@@ -1,14 +1,16 @@
 <Stem>
-M0(0): [M0] [Type(Stem), n(0)] {M5} {T0}
+M0(0): [M0] {}
 D: [!Type(Stem)] [] {}
 Color: #FDF5E6
+
+T0(10): []
 Change(Skin): [M5]
 
 <Skin>
 Color: #F1D08A
 
 <Blade>
-Color: #000000
+Color: #228B22
 
 <Root>
-Color: #000000
+Color: #E2D5C2
