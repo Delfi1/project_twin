@@ -85,9 +85,13 @@ pub fn main() {
             FixedUpdate,
             (Simulation::prepare, Simulation::process, Simulation::spawn)
                 .chain()
-                .run_if(in_state(SimulationState::World)),
+                .run_if(in_state(SimulationState::World))
+                .run_if(Simulation::is_running),
         )
-        .add_systems(PostUpdate, Simulation::select)
+        .add_systems(
+            PostUpdate,
+            (Simulation::select, Simulation::stop).run_if(in_state(SimulationState::World)),
+        )
         .add_systems(
             Update,
             <Simulation as Grid>::Controller::update

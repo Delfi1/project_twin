@@ -2,7 +2,7 @@ pub mod config;
 
 use bevy::{ecs::component::Mutable, prelude::*};
 pub use config::*;
-use std::{fmt::Debug, sync::Arc};
+use std::sync::Arc;
 
 pub trait Direction: Sized + Clone + Copy + Default {
     // Get list of directions to a neighbors cells
@@ -13,25 +13,15 @@ pub trait Direction: Sized + Clone + Copy + Default {
 pub trait Coords: Clone + Copy + std::hash::Hash + Eq + PartialEq {
     type Dir: Direction;
 
+    fn to_world(&self) -> Vec3;
     fn neighbor(&self, direction: &Self::Dir) -> Self;
 }
 
 pub trait Cell: Sized + Clone + Component<Mutability = Mutable> {
-    // todo: simulation core operations with cells
-    //fn tick();
-
-    //fn gen(&self) -> bool;
-    //fn can_division(&self) -> bool;
     fn new(_type: Arc<CellType>) -> Self;
 
     /// Клетка должна содержать ссылку на свой тип
     fn cell_type(&self) -> Arc<CellType>;
-
-    /// Активен ли ген?
-    fn is_active(&self, index: usize) -> bool;
-
-    /// Работает ли таймер?
-    fn is_running(&self, timer: usize) -> bool;
 }
 
 /// Основной абстрактный класс для работы с сеткой
@@ -52,7 +42,12 @@ pub trait Grid: Resource {
         materials: &Self::Materials,
         coords: Self::Coords,
         cell: Self::Cell,
-    );
+    ) -> Option<Entity>;
+
+    /// Остановить/запустить симуляцию
+    fn stop(grid: ResMut<Self>, kbd: Res<ButtonInput<KeyCode>>);
+
+    fn is_running(res: Option<Res<Self>>) -> bool;
 
     /// Получить клетку по координатам
     fn get(&self, coords: &Self::Coords) -> Option<&Entity>;
@@ -109,11 +104,22 @@ pub trait Grid: Resource {
 
     // Система которая проверяет выбор объекта на сетке
     fn select(
+        commands: Commands,
+        grid: ResMut<Self>,
+        materials: Res<Self::Materials>,
         camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
         origin: Single<Ref<Transform>, With<Self::Origin>>,
         window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
         msb: Res<ButtonInput<MouseButton>>,
     );
+
+    fn add_selection(
+        &mut self,
+        commands: &mut Commands,
+        materials: &Self::Materials,
+        coords: Self::Coords,
+    );
+    fn clear_selection(&mut self, commands: &mut Commands);
 }
 
 /// Контроллер камеры для сетки

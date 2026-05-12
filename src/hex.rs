@@ -49,6 +49,24 @@ pub struct HexCoords {
 impl HexCoords {
     pub const ORIGIN: Self = Self::new(0, 0);
 
+    pub const fn round(q0: f32, r0: f32, s0: f32) -> Self {
+        let mut q = q0.round();
+        let mut r = r0.round();
+        let s = s0.round();
+
+        let q_diff = (q - q0).abs();
+        let r_diff = (r - r0).abs();
+        let s_diff = (s - s0).abs();
+
+        if q_diff > r_diff && q_diff > s_diff {
+            q = -r - s;
+        } else if r_diff > s_diff {
+            r = -q - s;
+        }
+
+        Self::new(q as isize, r as isize)
+    }
+
     pub const fn new(q: isize, r: isize) -> Self {
         Self { q, r, s: -q - r }
     }
@@ -56,6 +74,15 @@ impl HexCoords {
 
 impl Coords for HexCoords {
     type Dir = HexDirection;
+
+    fn to_world(&self) -> Vec3 {
+        Vec3::new(
+            SQRT3 * self.q as f32 + SQRT3 / 2.0 * self.r as f32,
+            3. / 2. * self.r as f32,
+            0.0,
+        )
+        .mul(SIZE)
+    }
 
     fn neighbor(&self, dir: &Self::Dir) -> Self {
         match dir {
@@ -72,7 +99,7 @@ impl Coords for HexCoords {
 
 pub const SIZE: f32 = 16.0;
 // Внутренний радиус гексагона, корень из 3
-pub const INNER_RADIUS: f32 = 1.73205;
+pub const SQRT3: f32 = 1.73205;
 pub const THINKNESS: f32 = 4.0;
 
 #[derive(Component, Clone)]
@@ -101,16 +128,6 @@ impl Cell for HexCell {
     #[inline]
     fn cell_type(&self) -> Arc<CellType> {
         self._type.clone()
-    }
-
-    #[inline]
-    fn is_active(&self, index: usize) -> bool {
-        self.gens[index]
-    }
-
-    #[inline]
-    fn is_running(&self, timer: usize) -> bool {
-        self.timers[timer] != 0
     }
 }
 
@@ -164,6 +181,8 @@ impl Controller for HexController {
 #[derive(Resource)]
 pub struct HexMaterials {
     pub mesh: Mesh2d,
+    pub selected_mesh: Mesh2d,
+    pub selected_material: MeshMaterial2d<ColorMaterial>,
     pub materials: HashMap<String, MeshMaterial2d<ColorMaterial>>,
 }
 
@@ -171,6 +190,7 @@ impl FromWorld for HexMaterials {
     fn from_world(world: &mut World) -> Self {
         let mut meshes = world.get_resource_mut::<Assets<Mesh>>().unwrap();
         let mesh = Mesh2d(meshes.add(RegularPolygon::new(SIZE, 6).to_ring(THINKNESS)));
+        let selected_mesh = Mesh2d(meshes.add(RegularPolygon::new(SIZE, 6)));
 
         let grid = world.get_resource::<HexGrid>().unwrap();
         let config = grid.config.clone();
@@ -182,7 +202,14 @@ impl FromWorld for HexMaterials {
             materials.insert(name.clone(), MeshMaterial2d(material));
         }
 
-        Self { mesh, materials }
+        let selected_material = MeshMaterial2d(color_materials.add(Color::srgb_u8(0, 120, 215)));
+
+        Self {
+            mesh,
+            selected_mesh,
+            selected_material,
+            materials,
+        }
     }
 }
 
@@ -205,9 +232,11 @@ impl Default for HexPopulate {
 #[derive(Resource)]
 pub struct HexGrid {
     pub config: Arc<Config>,
+    running: bool,
     // Родительский элемент от которого уже отрисовываются все клетки
     parent: Entity,
 
+    selected: Option<(HexCoords, Entity)>,
     data: HashMap<HexCoords, Entity>,
     // Концентрация морфогена в межклеточном веществе определенной клетки.
     // Постепенно уменьшается до нуля, если не восполнять.
@@ -229,9 +258,25 @@ impl Grid for HexGrid {
         Self {
             config,
             parent,
+            running: true,
+            selected: None,
             data,
             concentration,
         }
+    }
+
+    fn stop(mut grid: ResMut<Self>, kbd: Res<ButtonInput<KeyCode>>) {
+        if kbd.just_pressed(KeyCode::Space) {
+            grid.running = !grid.running;
+        }
+    }
+
+    fn is_running(res: Option<Res<Self>>) -> bool {
+        let Some(grid) = res else {
+            return false;
+        };
+
+        grid.running
     }
 
     fn insert(
@@ -240,15 +285,10 @@ impl Grid for HexGrid {
         materials: &Self::Materials,
         coords: Self::Coords,
         cell: Self::Cell,
-    ) {
+    ) -> Option<Entity> {
         let material = materials.materials.get(&cell._type.name).unwrap();
 
-        let pos = Vec3::new(
-            INNER_RADIUS * coords.q as f32 + INNER_RADIUS / 2.0 * coords.r as f32,
-            3. / 2. * coords.r as f32,
-            0.0,
-        )
-        .mul(SIZE);
+        let pos = coords.to_world();
 
         let entity = commands
             .spawn((
@@ -260,8 +300,8 @@ impl Grid for HexGrid {
             .id();
         commands.entity(self.parent).add_child(entity);
 
-        self.data.insert(coords, entity);
         self.concentration.insert(coords, [false; GENS]);
+        self.data.insert(coords, entity)
     }
 
     fn get(&self, coords: &Self::Coords) -> Option<&Entity> {
@@ -289,6 +329,9 @@ impl Grid for HexGrid {
     }
 
     fn select(
+        mut commands: Commands,
+        mut grid: ResMut<Self>,
+        materials: Res<Self::Materials>,
         camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
         origin: Single<Ref<Transform>, With<Self::Origin>>,
         window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
@@ -296,14 +339,60 @@ impl Grid for HexGrid {
     ) {
         let (camera, camera_transform) = camera.into_inner();
 
+        if msb.just_pressed(MouseButton::Right) {
+            grid.clear_selection(&mut commands);
+            return;
+        }
+
         if !msb.just_pressed(MouseButton::Left) {
             return;
         }
 
         let cursor = window.cursor_position().unwrap();
-        let viewport = camera.viewport_to_world_2d(&camera_transform, cursor);
+        let viewport = camera
+            .viewport_to_world_2d(&camera_transform, cursor)
+            .unwrap()
+            - origin.translation.xy();
 
-        println!("Viewport: {:?}", viewport);
+        let x = (viewport.x) / SIZE;
+        let y = (viewport.y) / SIZE;
+        let q0 = x * SQRT3 / 3. - y / 3.;
+        let r0 = y * 2. / 3.;
+        let s0 = -q0 - r0;
+
+        let coords = HexCoords::round(q0, r0, s0);
+        grid.add_selection(&mut commands, &materials, coords);
+    }
+
+    fn add_selection(
+        &mut self,
+        commands: &mut Commands,
+        materials: &Self::Materials,
+        coords: Self::Coords,
+    ) {
+        self.clear_selection(commands);
+        if !self.data.contains_key(&coords) {
+            return;
+        }
+
+        let mesh = materials.selected_mesh.clone();
+        let material = materials.selected_material.clone();
+        let pos = coords.to_world().with_z(-1.0);
+
+        let entity = commands
+            .spawn((mesh, material, Transform::from_translation(pos)))
+            .id();
+        commands.entity(self.parent).add_child(entity);
+
+        self.selected = Some((coords, entity));
+    }
+
+    fn clear_selection(&mut self, commands: &mut Commands) {
+        if let Some((_, entity)) = self.selected {
+            commands.entity(entity).despawn();
+        }
+
+        self.selected = None;
     }
 
     /// Порядок подготовки:
@@ -342,7 +431,6 @@ impl Grid for HexGrid {
                             };
 
                             let prev = concentration.get_mut(&c).unwrap();
-                            println!("{} Concentration: {:?}", g, c);
                             prev[g] = true;
                         }
                     }
@@ -444,7 +532,9 @@ impl Grid for HexGrid {
         materials: Res<Self::Materials>,
     ) {
         for (coord, cell) in populate.to_spawn.drain() {
-            grid.insert(&mut commands, &materials, coord, cell);
+            if let Some(entity) = grid.insert(&mut commands, &materials, coord, cell) {
+                commands.entity(entity).despawn();
+            }
         }
     }
 }
