@@ -6,7 +6,7 @@ use bevy::{
 };
 
 use pest::Parser;
-use pest::iterators::Pairs;
+use pest::iterators::{Pair, Pairs};
 use pest_derive::*;
 use std::sync::Arc;
 use thiserror::Error;
@@ -18,7 +18,7 @@ pub const TYPES: usize = 8;
 #[derive(Debug, Clone)]
 // Ген с радиусом распространения морфогена
 pub struct Morphogen {
-    pub range: u8,
+    pub range: isize,
     pub condition: Condition,
 }
 
@@ -43,15 +43,61 @@ pub enum ConditionValue {
 }
 
 #[derive(Debug, Clone)]
-pub enum ConditionType {
-    Default(ConditionValue),
-    Negative(ConditionValue),
+pub struct ConditionType {
+    v: ConditionValue,
+    negate: bool,
+}
+
+impl ConditionType {
+    pub fn parse(pair: Pair<Rule>) -> Self {
+        let mut inner = pair.into_inner();
+        let negate = inner.next().unwrap().as_str() == "!";
+        let tag = inner.next().unwrap();
+
+        let v = match tag.as_rule() {
+            Rule::mgen => {
+                let index: u8 = tag.into_inner().as_str().parse().unwrap();
+                ConditionValue::M(index)
+            }
+            Rule::timer => {
+                let index: u8 = tag.into_inner().as_str().parse().unwrap();
+                ConditionValue::T(index)
+            }
+            Rule::is_type => {
+                let check: String = tag.into_inner().as_str().into();
+                ConditionValue::IsType(check)
+            }
+            Rule::neighbors => {
+                let number = tag.into_inner().as_str().parse().unwrap();
+                ConditionValue::Neighbors(number)
+            }
+            Rule::can_division => ConditionValue::Division,
+            _ => unreachable!("Can be reached"),
+        };
+
+        Self { v, negate }
+    }
+
+    pub fn check(&self, d: bool, n: u8, c: &[u8; GENS], t: &[u8; TIMERS], _type: &String) -> bool {
+        let result = match &self.v {
+            ConditionValue::M(i) => c[*i as usize] > 0,
+            ConditionValue::T(i) => t[*i as usize] > 0,
+            ConditionValue::IsType(v) => v == _type,
+            ConditionValue::Neighbors(v) => n == *v,
+            ConditionValue::Division => d,
+        };
+
+        if self.negate {
+            return !result;
+        }
+        return result;
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Condition {
-    activators: Vec<ConditionType>,
-    deactivators: Vec<ConditionType>,
+    pub activators: Vec<Vec<ConditionType>>,
+    pub deactivators: Vec<Vec<ConditionType>>,
 }
 
 impl Condition {
@@ -63,17 +109,61 @@ impl Condition {
     }
 
     pub fn parse(values: Pairs<Rule>) -> Self {
-        let result = Self::new();
+        let mut result = Self::new();
 
-        for value in values {
-            match value.as_rule() {
-                Rule::activator => {}
-                Rule::deactivator => {}
+        for v in values {
+            let mut conditions = Vec::new();
+            let rule = v.as_rule();
+
+            for inner in v.into_inner() {
+                conditions.push(ConditionType::parse(inner));
+            }
+
+            match rule {
+                Rule::activator => {
+                    result.activators.push(conditions);
+                }
+                Rule::deactivator => {
+                    result.deactivators.push(conditions);
+                }
                 _ => (),
             }
         }
 
         result
+    }
+
+    // Морфогены находится в межклеточном веществе.
+    // Любой ген производит морфоген соответствующего типа.
+    // Причина активации гена - это существование определенных морфогенов
+    // в межклеточном веществе клетки.
+    //
+    /// d - может ли клетка делится?
+    /// n - количество соседей у клетки
+    /// c - концентрация генов в веществе клетки
+    /// t - гены-таймеры у клетки
+    /// _type - Тип текущей клетки
+    pub fn check(&self, d: bool, n: u8, c: &[u8; GENS], t: &[u8; TIMERS], _type: &String) -> bool {
+        // Если хотя-бы один деактиватор (подавляющий ген) активен, то пропускаем проверки
+        for v in &self.deactivators {
+            let result = v.iter().all(|cv| cv.check(d, n, c, t, _type));
+
+            if result {
+                return false;
+            }
+        }
+
+        // Если все значения активатора верны, то возвращается true. Иначе проверяем дальше.
+        for v in &self.activators {
+            let result = v.iter().all(|cv| cv.check(d, n, c, t, _type));
+
+            if result {
+                return true;
+            }
+        }
+
+        // Если никакой активатор не работает, выключаем ген
+        return false;
     }
 }
 
@@ -175,9 +265,10 @@ impl AssetLoader for ConfigLoader {
                         Rule::mgen => {
                             let index: usize = tag.into_inner().as_str().parse().unwrap();
                             let mgen_inner = property.next().unwrap();
-                            let range: u8 = mgen_inner.into_inner().as_str().parse().unwrap();
+                            let range: isize = mgen_inner.into_inner().as_str().parse().unwrap();
+                            assert!(range >= 0);
 
-                            let condition = Condition::parse(property.next().unwrap().into_inner());
+                            let condition = Condition::parse(property);
                             value.gens.insert(index, Morphogen { range, condition });
                         }
                         Rule::timer => {
@@ -185,14 +276,14 @@ impl AssetLoader for ConfigLoader {
                             let timer_inner = property.next().unwrap();
                             let time: u8 = timer_inner.into_inner().as_str().parse().unwrap();
 
-                            let condition = Condition::parse(property.next().unwrap().into_inner());
+                            let condition = Condition::parse(property);
                             value.timers.insert(index, Timer { time, condition });
                         }
                         Rule::change => {
                             let mut property_name = property.next().unwrap().into_inner();
                             let name: String = property_name.next().unwrap().as_str().into();
 
-                            let condition = Condition::parse(property.next().unwrap().into_inner());
+                            let condition = Condition::parse(property);
                             value.changes.insert(name, condition);
                         }
                         _ => (),

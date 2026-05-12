@@ -13,12 +13,12 @@ mgen   = { "M" ~ index }
 timer  = { "T" ~ index }
 change = { "Change" }
 
-is_division = { "D" }
-is_type     = { "Type" ~ value }
-neighbors   = { "n" ~ value }
+can_division = { "D" }
+is_type      = { "Type" ~ value }
+neighbors    = { "n" ~ value }
 
 negation  = { "!" | "" }
-condition = { negation ~ (mgen | is_type | timer | neighbors | is_division) }
+condition = { negation ~ (mgen | is_type | timer | neighbors | can_division) }
 
 activator = {
     "[" ~ "]"

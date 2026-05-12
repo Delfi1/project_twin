@@ -56,8 +56,11 @@ pub trait Grid: Resource {
     /// Получить клетку по координатам
     fn get(&self, coords: &Self::Coords) -> Option<&Entity>;
 
+    /// Получить концентрацию морфогена на определенной позиции
+    fn concentration(&self, coords: &Self::Coords) -> Option<&[u8; GENS]>;
+
     /// Количество соседей у данной клетки
-    fn neighbors(&self, coords: Self::Coords) -> u8 {
+    fn neighbors(&self, coords: &Self::Coords) -> u8 {
         let mut result = 0;
         for d in <Self::Coords as Coords>::Dir::neighbors() {
             result += self
@@ -75,8 +78,11 @@ pub trait Grid: Resource {
     /// Система которая подгружает сетку из конфигурации
     fn on_load(grid: ResMut<Self>, materials: Res<Self::Materials>, commands: Commands);
 
-    /// Обновление сетки через Bevy
-    fn on_tick(grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>);
+    /// Обновление морфогена
+    fn prepare(grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>);
+
+    /// Обновление морфогена
+    fn process(grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>);
 
     // Система которая проверяет выбор объекта на сетке
     fn select(camera: Single<(Mut<Transform>, Mut<Projection>), With<Self::Controller>>);

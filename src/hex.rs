@@ -76,22 +76,24 @@ pub const THINKNESS: f32 = 4.0;
 
 #[derive(Component, Clone)]
 pub struct HexCell {
-    pub _type: Arc<CellType>,
+    _type: Arc<CellType>,
     pub gens: [bool; GENS],
     pub timers: [u8; TIMERS],
+    // Могла ли клетка делится в предыдущий тик
+    d: bool,
 }
 
 impl Cell for HexCell {
     // M0 is always active on init
     fn new(_type: Arc<CellType>) -> Self {
         let timers = [0; TIMERS];
-        let mut gens = [false; GENS];
-        gens[0] = true;
+        let gens = [false; GENS];
 
         Self {
             _type,
             gens,
             timers,
+            d: false,
         }
     }
 
@@ -192,7 +194,10 @@ pub struct HexGrid {
     // Родительский элемент от которого уже отрисовываются все клетки
     parent: Entity,
 
-    grid: HashMap<HexCoords, Entity>,
+    data: HashMap<HexCoords, Entity>,
+    // Концентрация морфогена в межклеточном веществе определенной клетки.
+    // Постепенно уменьшается до нуля, если не восполнять.
+    concentration: HashMap<HexCoords, [u8; GENS]>,
 }
 
 impl Grid for HexGrid {
@@ -203,12 +208,14 @@ impl Grid for HexGrid {
     type Origin = HexOrigin;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self {
-        let grid = HashMap::new();
+        let data = HashMap::new();
+        let concentration = HashMap::new();
 
         Self {
             config,
             parent,
-            grid,
+            data,
+            concentration,
         }
     }
 
@@ -239,11 +246,16 @@ impl Grid for HexGrid {
             .id();
         commands.entity(self.parent).add_child(entity);
 
-        self.grid.insert(coords, entity);
+        self.data.insert(coords, entity);
+        self.concentration.insert(coords, [0; GENS]);
     }
 
     fn get(&self, coords: &Self::Coords) -> Option<&Entity> {
-        self.grid.get(coords)
+        self.data.get(coords)
+    }
+
+    fn concentration(&self, coords: &Self::Coords) -> Option<&[u8; GENS]> {
+        self.concentration.get(coords)
     }
 
     /// Двумерный мир с серым фоном
@@ -276,5 +288,116 @@ impl Grid for HexGrid {
         todo!()
     }
 
-    fn on_tick(mut grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>) {}
+    /// Порядок подготовки:
+    /// 1) Выработка гена в определенном количестве в межклеточном веществе в радиусе.
+    /// 2) Проверка на активацию/деактивацию генов
+    fn prepare(grid: ResMut<Self>, mut cells: Query<Mut<Self::Cell>>) {
+        let HexGrid {
+            data,
+            concentration,
+            ..
+        } = &mut grid.into_inner();
+
+        // Производим морфогены
+        for (coords, entity) in data.iter() {
+            let mut cell = cells.get_mut(*entity).unwrap();
+            let _type = cell.cell_type();
+
+            for g in 0..GENS {
+                let mut prev = concentration.get_mut(coords).unwrap();
+                if prev[g] != 0 {
+                    prev[g] -= 1;
+                }
+
+                if !cell.gens[g] {
+                    continue;
+                }
+                let Some(mgen) = _type.gens.get(&g) else {
+                    continue;
+                };
+
+                for q in coords.q - mgen.range..=coords.q + mgen.range {
+                    for r in coords.r - mgen.range..=coords.r + mgen.range {
+                        for s in coords.s - mgen.range..=coords.s + mgen.range {
+                            if q + r + s != 0 {
+                                continue;
+                            }
+
+                            let c = HexCoords { q, r, s };
+                            if !data.contains_key(&c) {
+                                continue;
+                            };
+
+                            // TODO: Сделать функцию распространения морфогена в зависомости от расстояния
+                            prev = concentration.get_mut(&c).unwrap();
+                            prev[g] = 4;
+                        }
+                    }
+                }
+            }
+
+            for t in 0..TIMERS {
+                if cell.timers[t] == 0 {
+                    continue;
+                }
+
+                cell.timers[t] -= 1;
+            }
+        }
+    }
+
+    /// Проверяем все условия, запускаем и останавливаем гены, меняем типы клетки и даже реплецируем их.
+    /// Порядок проверок:
+    /// 1) Дифференцировка (!пропустить остальные этапы, если верно)
+    /// 2) Реплецирование клетки
+    /// 3) Проверка на запуск генов/таймеров
+    fn process(grid: ResMut<Self>, mut cells: Query<Mut<Self::Cell>>) {
+        for (coords, entity) in grid.data.iter() {
+            let mut cell = cells.get_mut(*entity).unwrap();
+            let _type = cell.cell_type();
+            let n = grid.neighbors(coords);
+            let c = grid.concentration(&coords).unwrap();
+
+            // TODO: Этап 1:
+            for (new, condition) in &_type.changes {
+                if !condition.check(cell.d, n, c, &cell.timers, &_type.name) {
+                    continue;
+                }
+
+                let Some(_type) = grid.config.types.get(new) else {
+                    warn!("Cell type is not found: {}", new);
+                    continue;
+                };
+
+                *cell = Cell::new(_type.clone());
+                return;
+            }
+
+            // TODO: Этап 2
+            cell.d = match &_type.division {
+                Some(condition) => condition.check(cell.d, n, c, &cell.timers, &_type.name),
+                None => false,
+            };
+
+            // Этап 3
+            for (g, mgen) in _type.gens.iter() {
+                cell.gens[*g] = mgen
+                    .condition
+                    .check(cell.d, n, c, &cell.timers, &_type.name);
+            }
+
+            let mut timers = cell.timers.clone();
+            for (t, timer) in _type.timers.iter() {
+                if !timer
+                    .condition
+                    .check(cell.d, n, c, &cell.timers, &_type.name)
+                {
+                    continue;
+                }
+
+                timers[*t] = timer.time;
+            }
+            cell.timers = timers;
+        }
+    }
 }

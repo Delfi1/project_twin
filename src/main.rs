@@ -80,8 +80,10 @@ pub fn main() {
             load_config.run_if(in_state(SimulationState::Loading)),
         )
         .add_systems(
-            Update,
-            Simulation::on_tick.run_if(in_state(SimulationState::World)),
+            FixedUpdate,
+            (Simulation::prepare, Simulation::process)
+                .chain()
+                .run_if(in_state(SimulationState::World)),
         )
         .add_systems(
             Update,
