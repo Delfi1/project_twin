@@ -2,7 +2,7 @@ pub mod config;
 
 use bevy::{ecs::component::Mutable, prelude::*};
 pub use config::*;
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 pub trait Direction: Sized + Clone + Copy + Default {
     // Get list of directions to a neighbors cells
@@ -41,6 +41,7 @@ pub trait Grid: Resource {
     type Materials: Resource + FromWorld;
     type Controller: Controller;
     type Origin: Component + Default;
+    type Populate: Resource + FromWorld;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self;
 
@@ -50,14 +51,14 @@ pub trait Grid: Resource {
         commands: &mut Commands,
         materials: &Self::Materials,
         coords: Self::Coords,
-        cell_type: Arc<CellType>,
+        cell: Self::Cell,
     );
 
     /// Получить клетку по координатам
     fn get(&self, coords: &Self::Coords) -> Option<&Entity>;
 
     /// Получить концентрацию морфогена на определенной позиции
-    fn concentration(&self, coords: &Self::Coords) -> Option<&[u8; GENS]>;
+    fn concentration(&self, coords: &Self::Coords) -> Option<&[bool; GENS]>;
 
     /// Количество соседей у данной клетки
     fn neighbors(&self, coords: &Self::Coords) -> u8 {
@@ -67,6 +68,21 @@ pub trait Grid: Resource {
                 .get(&coords.neighbor(d))
                 .and_then(|_| Some(1))
                 .unwrap_or(0);
+        }
+
+        result
+    }
+
+    /// Свободные соседи
+    fn free_neighbors(&self, coords: &Self::Coords) -> Vec<Self::Coords> {
+        let mut result = Vec::with_capacity(16);
+        for d in <Self::Coords as Coords>::Dir::neighbors() {
+            let n = coords.neighbor(d);
+            if self.get(&n).is_some() {
+                continue;
+            }
+
+            result.push(n);
         }
 
         result
@@ -82,10 +98,22 @@ pub trait Grid: Resource {
     fn prepare(grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>);
 
     /// Обновление морфогена
-    fn process(grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>);
+    fn process(grid: Res<Self>, cells: Query<Mut<Self::Cell>>, populate: ResMut<Self::Populate>);
+
+    fn spawn(
+        grid: ResMut<Self>,
+        commands: Commands,
+        populate: ResMut<Self::Populate>,
+        materials: Res<Self::Materials>,
+    );
 
     // Система которая проверяет выбор объекта на сетке
-    fn select(camera: Single<(Mut<Transform>, Mut<Projection>), With<Self::Controller>>);
+    fn select(
+        camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
+        origin: Single<Ref<Transform>, With<Self::Origin>>,
+        window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+        msb: Res<ButtonInput<MouseButton>>,
+    );
 }
 
 /// Контроллер камеры для сетки

@@ -40,6 +40,7 @@ pub enum ConditionValue {
     IsType(String),
     Neighbors(u8),
     Division,
+    True,
 }
 
 #[derive(Debug, Clone)]
@@ -64,27 +65,38 @@ impl ConditionType {
                 ConditionValue::T(index)
             }
             Rule::is_type => {
-                let check: String = tag.into_inner().as_str().into();
+                let mut val = tag.into_inner();
+                let check: String = val.next().unwrap().into_inner().as_str().into();
                 ConditionValue::IsType(check)
             }
             Rule::neighbors => {
-                let number = tag.into_inner().as_str().parse().unwrap();
+                let mut val = tag.into_inner();
+                let number = val.next().unwrap().into_inner().as_str().parse().unwrap();
                 ConditionValue::Neighbors(number)
             }
             Rule::can_division => ConditionValue::Division,
+            Rule::is_true => ConditionValue::True,
             _ => unreachable!("Can be reached"),
         };
 
         Self { v, negate }
     }
 
-    pub fn check(&self, d: bool, n: u8, c: &[u8; GENS], t: &[u8; TIMERS], _type: &String) -> bool {
+    pub fn check(
+        &self,
+        d: bool,
+        n: u8,
+        c: &[bool; GENS],
+        t: &[u8; TIMERS],
+        _type: &String,
+    ) -> bool {
         let result = match &self.v {
-            ConditionValue::M(i) => c[*i as usize] > 0,
+            ConditionValue::M(i) => c[*i as usize],
             ConditionValue::T(i) => t[*i as usize] > 0,
             ConditionValue::IsType(v) => v == _type,
             ConditionValue::Neighbors(v) => n == *v,
             ConditionValue::Division => d,
+            ConditionValue::True => true,
         };
 
         if self.negate {
@@ -143,7 +155,14 @@ impl Condition {
     /// c - концентрация генов в веществе клетки
     /// t - гены-таймеры у клетки
     /// _type - Тип текущей клетки
-    pub fn check(&self, d: bool, n: u8, c: &[u8; GENS], t: &[u8; TIMERS], _type: &String) -> bool {
+    pub fn check(
+        &self,
+        d: bool,
+        n: u8,
+        c: &[bool; GENS],
+        t: &[u8; TIMERS],
+        _type: &String,
+    ) -> bool {
         // Если хотя-бы один деактиватор (подавляющий ген) активен, то пропускаем проверки
         for v in &self.deactivators {
             let result = v.iter().all(|cv| cv.check(d, n, c, t, _type));

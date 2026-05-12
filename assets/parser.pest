@@ -14,11 +14,13 @@ timer  = { "T" ~ index }
 change = { "Change" }
 
 can_division = { "D" }
+// Возвращает текущее состояние гена
+is_true = { "*" }
 is_type      = { "Type" ~ value }
 neighbors    = { "n" ~ value }
 
 negation  = { "!" | "" }
-condition = { negation ~ (mgen | is_type | timer | neighbors | can_division) }
+condition = { negation ~ (mgen | is_type | timer | neighbors | can_division | is_true) }
 
 activator = {
     "[" ~ "]"

@@ -2,6 +2,7 @@
 //! Симуляция Онтогенеза растения; The influence of water and light on growth;
 mod grid;
 mod hex;
+//mod rdd;
 
 use crate::grid::*;
 use bevy::{
@@ -47,6 +48,7 @@ fn load_config(
             .spawn((<Simulation as Grid>::Origin::default(), Transform::IDENTITY))
             .id();
         commands.insert_resource(Simulation::new(parent, Arc::new(config)));
+        commands.init_resource::<<Simulation as Grid>::Populate>();
         commands.init_resource::<<Simulation as Grid>::Materials>();
         // On config load grid creating
         state.set(SimulationState::World);
@@ -81,10 +83,11 @@ pub fn main() {
         )
         .add_systems(
             FixedUpdate,
-            (Simulation::prepare, Simulation::process)
+            (Simulation::prepare, Simulation::process, Simulation::spawn)
                 .chain()
                 .run_if(in_state(SimulationState::World)),
         )
+        .add_systems(PostUpdate, Simulation::select)
         .add_systems(
             Update,
             <Simulation as Grid>::Controller::update

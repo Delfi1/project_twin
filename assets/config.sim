@@ -1,8 +1,9 @@
 <Stem>
-M0(0): [M0, M1] [!M1] {!M2}
+M0(0): [M0] [Type(Stem), n(0)]
+M6(7): [Type(Stem), M0]
 
+D: [*] {!M6}
 Color: #FDF5E6
-Change(Skin): [M5]
 
 <Skin>
 M0(0): {M0}

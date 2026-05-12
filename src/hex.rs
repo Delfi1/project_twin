@@ -2,6 +2,7 @@
 
 use super::grid::*;
 use bevy::{platform::collections::HashMap, prelude::*};
+use rand::seq::IndexedRandom;
 use std::ops::Mul;
 use std::sync::Arc;
 
@@ -38,7 +39,7 @@ impl Direction for HexDirection {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
 pub struct HexCoords {
     q: isize,
     r: isize,
@@ -189,6 +190,19 @@ impl FromWorld for HexMaterials {
 pub struct HexOrigin;
 
 #[derive(Resource)]
+pub struct HexPopulate {
+    to_spawn: HashMap<HexCoords, HexCell>,
+}
+
+impl Default for HexPopulate {
+    fn default() -> Self {
+        Self {
+            to_spawn: HashMap::with_capacity(2048),
+        }
+    }
+}
+
+#[derive(Resource)]
 pub struct HexGrid {
     pub config: Arc<Config>,
     // Родительский элемент от которого уже отрисовываются все клетки
@@ -197,7 +211,7 @@ pub struct HexGrid {
     data: HashMap<HexCoords, Entity>,
     // Концентрация морфогена в межклеточном веществе определенной клетки.
     // Постепенно уменьшается до нуля, если не восполнять.
-    concentration: HashMap<HexCoords, [u8; GENS]>,
+    concentration: HashMap<HexCoords, [bool; GENS]>,
 }
 
 impl Grid for HexGrid {
@@ -206,6 +220,7 @@ impl Grid for HexGrid {
     type Controller = HexController;
     type Materials = HexMaterials;
     type Origin = HexOrigin;
+    type Populate = HexPopulate;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self {
         let data = HashMap::new();
@@ -224,9 +239,9 @@ impl Grid for HexGrid {
         commands: &mut Commands,
         materials: &Self::Materials,
         coords: Self::Coords,
-        cell_type: Arc<CellType>,
+        cell: Self::Cell,
     ) {
-        let material = materials.materials.get(&self.config.default).unwrap();
+        let material = materials.materials.get(&cell._type.name).unwrap();
 
         let pos = Vec3::new(
             INNER_RADIUS * coords.q as f32 + INNER_RADIUS / 2.0 * coords.r as f32,
@@ -235,7 +250,6 @@ impl Grid for HexGrid {
         )
         .mul(SIZE);
 
-        let cell = HexCell::new(cell_type);
         let entity = commands
             .spawn((
                 cell,
@@ -247,14 +261,14 @@ impl Grid for HexGrid {
         commands.entity(self.parent).add_child(entity);
 
         self.data.insert(coords, entity);
-        self.concentration.insert(coords, [0; GENS]);
+        self.concentration.insert(coords, [false; GENS]);
     }
 
     fn get(&self, coords: &Self::Coords) -> Option<&Entity> {
         self.data.get(coords)
     }
 
-    fn concentration(&self, coords: &Self::Coords) -> Option<&[u8; GENS]> {
+    fn concentration(&self, coords: &Self::Coords) -> Option<&[bool; GENS]> {
         self.concentration.get(coords)
     }
 
@@ -267,25 +281,29 @@ impl Grid for HexGrid {
     fn on_load(mut grid: ResMut<Self>, materials: Res<Self::Materials>, mut commands: Commands) {
         info!("Initializing grid...");
 
-        let mut coords = Self::Coords::ORIGIN;
-        let mut direction = HexDirection::None;
-
-        // Тестовая генерация хексов
-        let mut i = 0;
-        while i != 12 {
-            coords = coords.neighbor(&direction);
-            let _type = grid.config.types.get(&grid.config.default).unwrap().clone();
-            if grid.get(&coords).is_none() {
-                grid.insert(&mut commands, &materials, coords, _type);
-                i += 1;
-            }
-
-            direction = Direction::random();
-        }
+        let coords = Self::Coords::ORIGIN;
+        let _type = grid.config.types.get(&grid.config.default).unwrap().clone();
+        let mut cell = HexCell::new(_type);
+        cell.gens[0] = true;
+        grid.insert(&mut commands, &materials, coords, cell);
     }
 
-    fn select(camera: Single<(Mut<Transform>, Mut<Projection>), With<Self::Controller>>) {
-        todo!()
+    fn select(
+        camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
+        origin: Single<Ref<Transform>, With<Self::Origin>>,
+        window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+        msb: Res<ButtonInput<MouseButton>>,
+    ) {
+        let (camera, camera_transform) = camera.into_inner();
+
+        if !msb.just_pressed(MouseButton::Left) {
+            return;
+        }
+
+        let cursor = window.cursor_position().unwrap();
+        let viewport = camera.viewport_to_world_2d(&camera_transform, cursor);
+
+        println!("Viewport: {:?}", viewport);
     }
 
     /// Порядок подготовки:
@@ -304,11 +322,6 @@ impl Grid for HexGrid {
             let _type = cell.cell_type();
 
             for g in 0..GENS {
-                let mut prev = concentration.get_mut(coords).unwrap();
-                if prev[g] != 0 {
-                    prev[g] -= 1;
-                }
-
                 if !cell.gens[g] {
                     continue;
                 }
@@ -328,9 +341,9 @@ impl Grid for HexGrid {
                                 continue;
                             };
 
-                            // TODO: Сделать функцию распространения морфогена в зависомости от расстояния
-                            prev = concentration.get_mut(&c).unwrap();
-                            prev[g] = 4;
+                            let prev = concentration.get_mut(&c).unwrap();
+                            println!("{} Concentration: {:?}", g, c);
+                            prev[g] = true;
                         }
                     }
                 }
@@ -351,33 +364,56 @@ impl Grid for HexGrid {
     /// 1) Дифференцировка (!пропустить остальные этапы, если верно)
     /// 2) Реплецирование клетки
     /// 3) Проверка на запуск генов/таймеров
-    fn process(grid: ResMut<Self>, mut cells: Query<Mut<Self::Cell>>) {
+    fn process(
+        grid: Res<Self>,
+        mut cells: Query<Mut<Self::Cell>>,
+        populate: ResMut<Self::Populate>,
+    ) {
+        let Self::Populate { to_spawn } = &mut populate.into_inner();
+        let mut rng = rand::rng();
+
         for (coords, entity) in grid.data.iter() {
             let mut cell = cells.get_mut(*entity).unwrap();
             let _type = cell.cell_type();
             let n = grid.neighbors(coords);
             let c = grid.concentration(&coords).unwrap();
 
-            // TODO: Этап 1:
+            // Этап 1:
+            let mut skip = false;
             for (new, condition) in &_type.changes {
                 if !condition.check(cell.d, n, c, &cell.timers, &_type.name) {
                     continue;
                 }
 
-                let Some(_type) = grid.config.types.get(new) else {
+                let Some(new_type) = grid.config.types.get(new) else {
                     warn!("Cell type is not found: {}", new);
                     continue;
                 };
 
-                *cell = Cell::new(_type.clone());
-                return;
+                // Дифференцировка типа клетки
+                to_spawn.insert(*coords, Cell::new(new_type.clone()));
+                skip = true;
+                break;
             }
 
-            // TODO: Этап 2
+            if skip {
+                continue;
+            }
+
+            // Этап 2
             cell.d = match &_type.division {
                 Some(condition) => condition.check(cell.d, n, c, &cell.timers, &_type.name),
                 None => false,
             };
+
+            if cell.d {
+                let neighbors = grid.free_neighbors(coords);
+
+                if neighbors.len() != 0 {
+                    let nbr = neighbors.choose(&mut rng).unwrap();
+                    to_spawn.insert(*nbr, Cell::new(_type.clone()));
+                }
+            }
 
             // Этап 3
             for (g, mgen) in _type.gens.iter() {
@@ -398,6 +434,17 @@ impl Grid for HexGrid {
                 timers[*t] = timer.time;
             }
             cell.timers = timers;
+        }
+    }
+
+    fn spawn(
+        mut grid: ResMut<Self>,
+        mut commands: Commands,
+        mut populate: ResMut<Self::Populate>,
+        materials: Res<Self::Materials>,
+    ) {
+        for (coord, cell) in populate.to_spawn.drain() {
+            grid.insert(&mut commands, &materials, coord, cell);
         }
     }
 }
