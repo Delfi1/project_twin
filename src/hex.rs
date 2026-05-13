@@ -2,7 +2,6 @@
 
 use super::grid::*;
 use bevy::{platform::collections::HashMap, prelude::*};
-use rand::seq::IndexedRandom;
 use std::ops::Mul;
 use std::sync::Arc;
 
@@ -34,8 +33,68 @@ impl Direction for HexDirection {
         &Self::NEIGHBORS
     }
 
-    fn random() -> Self {
-        Self::NEIGHBORS[rand::random_range(0..6)]
+    //fn random() -> Self { Self::NEIGHBORS[rand::random_range(0..6)] }
+}
+
+pub struct RangeIter {
+    start: HexCoords,
+    end: HexCoords,
+
+    // Текущие данные для перебора
+    q: isize,
+    r: isize,
+    s: isize,
+    finished: bool,
+}
+
+impl RangeIter {
+    pub fn new(coords: HexCoords, range: isize) -> Self {
+        let start = coords - range;
+        let end = coords + range;
+        Self {
+            q: start.q,
+            r: start.r,
+            s: start.s,
+            start,
+            end,
+            finished: false,
+        }
+    }
+}
+
+impl Iterator for RangeIter {
+    type Item = HexCoords;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let s = self.s;
+            let r = self.r;
+            let q = self.q;
+
+            self.s += 1;
+
+            if self.s > self.end.s {
+                self.s = self.start.s;
+                self.r += 1;
+
+                if self.r > self.end.r {
+                    self.r = self.start.r;
+                    self.q += 1;
+
+                    if self.q > self.end.q {
+                        self.finished = true;
+                    }
+                }
+            }
+
+            if q + r + s == 0 {
+                return Some(HexCoords { q, r, s });
+            }
+
+            if self.finished {
+                return None;
+            }
+        }
     }
 }
 
@@ -44,6 +103,30 @@ pub struct HexCoords {
     q: isize,
     r: isize,
     s: isize,
+}
+
+impl std::ops::Sub<isize> for HexCoords {
+    type Output = Self;
+
+    fn sub(mut self, rhs: isize) -> Self {
+        self.q -= rhs;
+        self.r -= rhs;
+        self.s -= rhs;
+
+        self
+    }
+}
+
+impl std::ops::Add<isize> for HexCoords {
+    type Output = Self;
+
+    fn add(mut self, rhs: isize) -> Self {
+        self.q += rhs;
+        self.r += rhs;
+        self.s += rhs;
+
+        self
+    }
 }
 
 impl HexCoords {
@@ -74,6 +157,7 @@ impl HexCoords {
 
 impl Coords for HexCoords {
     type Dir = HexDirection;
+    type Iter = RangeIter;
 
     fn to_world(&self) -> Vec3 {
         Vec3::new(
@@ -95,6 +179,10 @@ impl Coords for HexCoords {
             Self::Dir::Southwest => Self::new(self.q - 1, self.r + 1),
         }
     }
+
+    fn range(self, v: isize) -> Self::Iter {
+        RangeIter::new(self, v)
+    }
 }
 
 pub const SIZE: f32 = 16.0;
@@ -112,7 +200,6 @@ pub struct HexCell {
 }
 
 impl Cell for HexCell {
-    // M0 is always active on init
     fn new(_type: Arc<CellType>) -> Self {
         let timers = [0; TIMERS];
         let gens = [false; GENS];
@@ -126,8 +213,38 @@ impl Cell for HexCell {
     }
 
     #[inline]
-    fn cell_type(&self) -> Arc<CellType> {
+    fn get_type(&self) -> Arc<CellType> {
         self._type.clone()
+    }
+
+    #[inline]
+    fn gens(&self) -> &[bool; GENS] {
+        &self.gens
+    }
+
+    #[inline]
+    fn gens_mut(&mut self) -> &mut [bool; GENS] {
+        &mut self.gens
+    }
+
+    #[inline]
+    fn timers(&self) -> &[u8; TIMERS] {
+        &self.timers
+    }
+
+    #[inline]
+    fn timers_mut(&mut self) -> &mut [u8; TIMERS] {
+        &mut self.timers
+    }
+
+    #[inline]
+    fn set_timer(&mut self, i: usize, v: u8) {
+        self.timers[i] = v;
+    }
+
+    #[inline]
+    fn get_divide(&mut self) -> &mut bool {
+        &mut self.d
     }
 }
 
@@ -217,30 +334,12 @@ impl FromWorld for HexMaterials {
 pub struct HexOrigin;
 
 #[derive(Resource)]
-pub struct HexPopulate {
-    to_spawn: HashMap<HexCoords, HexCell>,
-}
-
-impl Default for HexPopulate {
-    fn default() -> Self {
-        Self {
-            to_spawn: HashMap::with_capacity(2048),
-        }
-    }
-}
-
-#[derive(Resource)]
 pub struct HexGrid {
     pub config: Arc<Config>,
-    running: bool,
-    // Родительский элемент от которого уже отрисовываются все клетки
     parent: Entity,
 
     selected: Option<(HexCoords, Entity)>,
     data: HashMap<HexCoords, Entity>,
-    // Концентрация морфогена в межклеточном веществе определенной клетки.
-    // Постепенно уменьшается до нуля, если не восполнять.
-    concentration: HashMap<HexCoords, [bool; GENS]>,
 }
 
 impl Grid for HexGrid {
@@ -249,39 +348,52 @@ impl Grid for HexGrid {
     type Controller = HexController;
     type Materials = HexMaterials;
     type Origin = HexOrigin;
-    type Populate = HexPopulate;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self {
         let data = HashMap::new();
-        let concentration = HashMap::new();
 
         Self {
             config,
             parent,
-            running: true,
             selected: None,
             data,
-            concentration,
         }
     }
 
-    fn stop(mut grid: ResMut<Self>, kbd: Res<ButtonInput<KeyCode>>) {
-        if kbd.just_pressed(KeyCode::Space) {
-            grid.running = !grid.running;
-        }
+    /// Двумерный мир с серым фоном
+    fn on_setup(mut commands: Commands) {
+        commands.spawn((Camera2d, HexController));
+        commands.insert_resource(ClearColor(Color::srgb_u8(43, 43, 43)));
     }
 
-    fn is_running(res: Option<Res<Self>>) -> bool {
-        let Some(grid) = res else {
-            return false;
-        };
+    fn on_load(
+        mut grid: ResMut<Self>,
+        mut concentrations: ResMut<Concentrations<HexCoords>>,
+        materials: Res<Self::Materials>,
+        mut commands: Commands,
+    ) {
+        info!("Initializing grid...");
 
-        grid.running
+        let coords = Self::Coords::ORIGIN;
+        let _type = grid.config.types.get(&grid.config.default).unwrap().clone();
+        let mut cell = HexCell::new(_type);
+        cell.gens[0] = true;
+
+        grid.insert(&mut commands, &mut concentrations, &materials, coords, cell);
+    }
+
+    fn get_data(&self) -> &HashMap<Self::Coords, Entity> {
+        &self.data
+    }
+
+    fn get(&self, coords: &Self::Coords) -> Option<&Entity> {
+        self.data.get(coords)
     }
 
     fn insert(
         &mut self,
         commands: &mut Commands,
+        concentrations: &mut Concentrations<HexCoords>,
         materials: &Self::Materials,
         coords: Self::Coords,
         cell: Self::Cell,
@@ -300,32 +412,12 @@ impl Grid for HexGrid {
             .id();
         commands.entity(self.parent).add_child(entity);
 
-        self.concentration.insert(coords, [false; GENS]);
+        concentrations.insert(coords, [false; GENS]);
         self.data.insert(coords, entity)
     }
 
-    fn get(&self, coords: &Self::Coords) -> Option<&Entity> {
-        self.data.get(coords)
-    }
-
-    fn concentration(&self, coords: &Self::Coords) -> Option<&[bool; GENS]> {
-        self.concentration.get(coords)
-    }
-
-    /// Двумерный мир с серым фоном
-    fn on_setup(mut commands: Commands) {
-        commands.spawn((Camera2d, HexController));
-        commands.insert_resource(ClearColor(Color::srgb_u8(43, 43, 43)));
-    }
-
-    fn on_load(mut grid: ResMut<Self>, materials: Res<Self::Materials>, mut commands: Commands) {
-        info!("Initializing grid...");
-
-        let coords = Self::Coords::ORIGIN;
-        let _type = grid.config.types.get(&grid.config.default).unwrap().clone();
-        let mut cell = HexCell::new(_type);
-        cell.gens[0] = true;
-        grid.insert(&mut commands, &materials, coords, cell);
+    fn get_config(&self) -> Arc<Config> {
+        self.config.clone()
     }
 
     fn select(
@@ -393,148 +485,5 @@ impl Grid for HexGrid {
         }
 
         self.selected = None;
-    }
-
-    /// Порядок подготовки:
-    /// 1) Выработка гена в определенном количестве в межклеточном веществе в радиусе.
-    /// 2) Проверка на активацию/деактивацию генов
-    fn prepare(grid: ResMut<Self>, mut cells: Query<Mut<Self::Cell>>) {
-        let HexGrid {
-            data,
-            concentration,
-            ..
-        } = &mut grid.into_inner();
-
-        // Производим морфогены
-        for (coords, entity) in data.iter() {
-            let mut cell = cells.get_mut(*entity).unwrap();
-            let _type = cell.cell_type();
-
-            for g in 0..GENS {
-                if !cell.gens[g] {
-                    continue;
-                }
-                let Some(mgen) = _type.gens.get(&g) else {
-                    continue;
-                };
-
-                for q in coords.q - mgen.range..=coords.q + mgen.range {
-                    for r in coords.r - mgen.range..=coords.r + mgen.range {
-                        for s in coords.s - mgen.range..=coords.s + mgen.range {
-                            if q + r + s != 0 {
-                                continue;
-                            }
-
-                            let c = HexCoords { q, r, s };
-                            if !data.contains_key(&c) {
-                                continue;
-                            };
-
-                            let prev = concentration.get_mut(&c).unwrap();
-                            prev[g] = true;
-                        }
-                    }
-                }
-            }
-
-            for t in 0..TIMERS {
-                if cell.timers[t] == 0 {
-                    continue;
-                }
-
-                cell.timers[t] -= 1;
-            }
-        }
-    }
-
-    /// Проверяем все условия, запускаем и останавливаем гены, меняем типы клетки и даже реплецируем их.
-    /// Порядок проверок:
-    /// 1) Дифференцировка (!пропустить остальные этапы, если верно)
-    /// 2) Реплецирование клетки
-    /// 3) Проверка на запуск генов/таймеров
-    fn process(
-        grid: Res<Self>,
-        mut cells: Query<Mut<Self::Cell>>,
-        populate: ResMut<Self::Populate>,
-    ) {
-        let Self::Populate { to_spawn } = &mut populate.into_inner();
-        let mut rng = rand::rng();
-
-        for (coords, entity) in grid.data.iter() {
-            let mut cell = cells.get_mut(*entity).unwrap();
-            let _type = cell.cell_type();
-            let n = grid.neighbors(coords);
-            let c = grid.concentration(&coords).unwrap();
-
-            // Этап 1:
-            let mut skip = false;
-            for (new, condition) in &_type.changes {
-                if !condition.check(cell.d, n, c, &cell.timers, &_type.name) {
-                    continue;
-                }
-
-                let Some(new_type) = grid.config.types.get(new) else {
-                    warn!("Cell type is not found: {}", new);
-                    continue;
-                };
-
-                // Дифференцировка типа клетки
-                to_spawn.insert(*coords, Cell::new(new_type.clone()));
-                skip = true;
-                break;
-            }
-
-            if skip {
-                continue;
-            }
-
-            // Этап 2
-            cell.d = match &_type.division {
-                Some(condition) => condition.check(cell.d, n, c, &cell.timers, &_type.name),
-                None => false,
-            };
-
-            if cell.d {
-                let neighbors = grid.free_neighbors(coords);
-
-                if neighbors.len() != 0 {
-                    let nbr = neighbors.choose(&mut rng).unwrap();
-                    to_spawn.insert(*nbr, Cell::new(_type.clone()));
-                }
-            }
-
-            // Этап 3
-            for (g, mgen) in _type.gens.iter() {
-                cell.gens[*g] = mgen
-                    .condition
-                    .check(cell.d, n, c, &cell.timers, &_type.name);
-            }
-
-            let mut timers = cell.timers.clone();
-            for (t, timer) in _type.timers.iter() {
-                if !timer
-                    .condition
-                    .check(cell.d, n, c, &cell.timers, &_type.name)
-                {
-                    continue;
-                }
-
-                timers[*t] = timer.time;
-            }
-            cell.timers = timers;
-        }
-    }
-
-    fn spawn(
-        mut grid: ResMut<Self>,
-        mut commands: Commands,
-        mut populate: ResMut<Self::Populate>,
-        materials: Res<Self::Materials>,
-    ) {
-        for (coord, cell) in populate.to_spawn.drain() {
-            if let Some(entity) = grid.insert(&mut commands, &materials, coord, cell) {
-                commands.entity(entity).despawn();
-            }
-        }
     }
 }

@@ -47,10 +47,11 @@ fn load_config(
         let parent = commands
             .spawn((<Simulation as Grid>::Origin::default(), Transform::IDENTITY))
             .id();
+
         commands.insert_resource(Simulation::new(parent, Arc::new(config)));
-        commands.init_resource::<<Simulation as Grid>::Populate>();
+        Simulation::firstly(&mut commands);
         commands.init_resource::<<Simulation as Grid>::Materials>();
-        // On config load grid creating
+
         state.set(SimulationState::World);
     }
 
@@ -85,12 +86,11 @@ pub fn main() {
             FixedUpdate,
             (Simulation::prepare, Simulation::process, Simulation::spawn)
                 .chain()
-                .run_if(in_state(SimulationState::World))
-                .run_if(Simulation::is_running),
+                .run_if(in_state(SimulationState::World)),
         )
         .add_systems(
             PostUpdate,
-            (Simulation::select, Simulation::stop).run_if(in_state(SimulationState::World)),
+            Simulation::select.run_if(in_state(SimulationState::World)),
         )
         .add_systems(
             Update,

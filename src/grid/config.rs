@@ -29,10 +29,6 @@ pub struct Timer {
     pub condition: Condition,
 }
 
-// Ген который отвечает за дифференцировку клетки
-#[derive(Debug, Clone)]
-pub struct Change(String);
-
 #[derive(Debug, Clone)]
 pub enum ConditionValue {
     M(u8),

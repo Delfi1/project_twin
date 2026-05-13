@@ -1,125 +1,40 @@
 pub mod config;
 
-use bevy::{ecs::component::Mutable, prelude::*};
+use bevy::{platform::collections::HashMap, prelude::*};
 pub use config::*;
+use rand::prelude::*;
 use std::sync::Arc;
 
 pub trait Direction: Sized + Clone + Copy + Default {
     // Get list of directions to a neighbors cells
     fn neighbors() -> &'static [Self];
-    fn random() -> Self;
+    //fn random() -> Self;
 }
 
 pub trait Coords: Clone + Copy + std::hash::Hash + Eq + PartialEq {
     type Dir: Direction;
+    type Iter: Iterator<Item = Self>;
 
+    /// Конвертировать локальную координату в глобальную
     fn to_world(&self) -> Vec3;
+
     fn neighbor(&self, direction: &Self::Dir) -> Self;
+
+    fn range(self, v: isize) -> Self::Iter;
 }
 
-pub trait Cell: Sized + Clone + Component<Mutability = Mutable> {
+pub trait Cell: Sized + Clone + Component<Mutability = bevy::ecs::component::Mutable> {
     fn new(_type: Arc<CellType>) -> Self;
 
     /// Клетка должна содержать ссылку на свой тип
-    fn cell_type(&self) -> Arc<CellType>;
-}
+    fn get_type(&self) -> Arc<CellType>;
 
-/// Основной абстрактный класс для работы с сеткой
-pub trait Grid: Resource {
-    type Cell: Cell;
-    type Coords: Coords;
-    type Materials: Resource + FromWorld;
-    type Controller: Controller;
-    type Origin: Component + Default;
-    type Populate: Resource + FromWorld;
-
-    fn new(parent: Entity, config: Arc<Config>) -> Self;
-
-    /// Добавить клетку в сетку по координатам
-    fn insert(
-        &mut self,
-        commands: &mut Commands,
-        materials: &Self::Materials,
-        coords: Self::Coords,
-        cell: Self::Cell,
-    ) -> Option<Entity>;
-
-    /// Остановить/запустить симуляцию
-    fn stop(grid: ResMut<Self>, kbd: Res<ButtonInput<KeyCode>>);
-
-    fn is_running(res: Option<Res<Self>>) -> bool;
-
-    /// Получить клетку по координатам
-    fn get(&self, coords: &Self::Coords) -> Option<&Entity>;
-
-    /// Получить концентрацию морфогена на определенной позиции
-    fn concentration(&self, coords: &Self::Coords) -> Option<&[bool; GENS]>;
-
-    /// Количество соседей у данной клетки
-    fn neighbors(&self, coords: &Self::Coords) -> u8 {
-        let mut result = 0;
-        for d in <Self::Coords as Coords>::Dir::neighbors() {
-            result += self
-                .get(&coords.neighbor(d))
-                .and_then(|_| Some(1))
-                .unwrap_or(0);
-        }
-
-        result
-    }
-
-    /// Свободные соседи
-    fn free_neighbors(&self, coords: &Self::Coords) -> Vec<Self::Coords> {
-        let mut result = Vec::with_capacity(16);
-        for d in <Self::Coords as Coords>::Dir::neighbors() {
-            let n = coords.neighbor(d);
-            if self.get(&n).is_some() {
-                continue;
-            }
-
-            result.push(n);
-        }
-
-        result
-    }
-
-    // Найстройка окружения Bevy
-    fn on_setup(commands: Commands);
-
-    /// Система которая подгружает сетку из конфигурации
-    fn on_load(grid: ResMut<Self>, materials: Res<Self::Materials>, commands: Commands);
-
-    /// Обновление морфогена
-    fn prepare(grid: ResMut<Self>, cells: Query<Mut<Self::Cell>>);
-
-    /// Обновление морфогена
-    fn process(grid: Res<Self>, cells: Query<Mut<Self::Cell>>, populate: ResMut<Self::Populate>);
-
-    fn spawn(
-        grid: ResMut<Self>,
-        commands: Commands,
-        populate: ResMut<Self::Populate>,
-        materials: Res<Self::Materials>,
-    );
-
-    // Система которая проверяет выбор объекта на сетке
-    fn select(
-        commands: Commands,
-        grid: ResMut<Self>,
-        materials: Res<Self::Materials>,
-        camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
-        origin: Single<Ref<Transform>, With<Self::Origin>>,
-        window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
-        msb: Res<ButtonInput<MouseButton>>,
-    );
-
-    fn add_selection(
-        &mut self,
-        commands: &mut Commands,
-        materials: &Self::Materials,
-        coords: Self::Coords,
-    );
-    fn clear_selection(&mut self, commands: &mut Commands);
+    fn gens(&self) -> &[bool; GENS];
+    fn gens_mut(&mut self) -> &mut [bool; GENS];
+    fn timers(&self) -> &[u8; TIMERS];
+    fn timers_mut(&mut self) -> &mut [u8; TIMERS];
+    fn set_timer(&mut self, i: usize, v: u8);
+    fn get_divide(&mut self) -> &mut bool;
 }
 
 /// Контроллер камеры для сетки
@@ -136,4 +51,281 @@ pub trait Controller: Component + Sized {
         scroll_msg: MessageReader<bevy::input::mouse::MouseWheel>,
         camera: Single<(Mut<Transform>, Mut<Projection>), With<Self>>,
     );
+}
+
+#[derive(Resource)]
+/// Клетки которые нужно будет создать в конце тика
+pub struct SpawnQuery<C: Coords, T: Cell>(HashMap<C, T>);
+
+unsafe impl<C: Coords, T: Cell> Send for SpawnQuery<C, T> {}
+unsafe impl<C: Coords, T: Cell> Sync for SpawnQuery<C, T> {}
+
+impl<C: Coords, T: Cell> Default for SpawnQuery<C, T> {
+    fn default() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl<C: Coords, T: Cell> SpawnQuery<C, T> {
+    pub fn insert(&mut self, coords: C, value: T) {
+        self.0.insert(coords, value);
+    }
+
+    pub fn get_mut(&mut self) -> &mut HashMap<C, T> {
+        &mut self.0
+    }
+}
+
+#[derive(Resource)]
+/// Концентрация морфогена в межклеточном веществе определенной клетки.
+pub struct Concentrations<C: Coords>(HashMap<C, [bool; GENS]>);
+
+unsafe impl<C: Coords> Send for Concentrations<C> {}
+unsafe impl<C: Coords> Sync for Concentrations<C> {}
+
+impl<C: Coords> Default for Concentrations<C> {
+    fn default() -> Self {
+        Self(HashMap::new())
+    }
+}
+
+impl<C: Coords> Concentrations<C> {
+    pub fn insert(&mut self, coords: C, values: [bool; GENS]) {
+        self.0.insert(coords, values);
+    }
+
+    pub fn get(&self, coords: &C) -> Option<&[bool; GENS]> {
+        self.0.get(coords)
+    }
+
+    pub fn get_mut(&mut self, coords: &C) -> Option<&mut [bool; GENS]> {
+        self.0.get_mut(coords)
+    }
+}
+
+/// Основной абстрактный класс для работы с сеткой
+pub trait Grid: Resource {
+    type Cell: Cell;
+    type Coords: Coords;
+    type Origin: Component + FromWorld;
+    type Controller: Controller;
+    type Materials: Resource + FromWorld;
+
+    fn new(parent: Entity, config: Arc<Config>) -> Self;
+
+    fn firstly(commands: &mut Commands) {
+        commands.init_resource::<SpawnQuery<Self::Coords, Self::Cell>>();
+        commands.init_resource::<Concentrations<Self::Coords>>();
+    }
+
+    /// Настройка окружения Bevy
+    fn on_setup(commands: Commands);
+
+    /// Система которая подгружает сетку из конфигурации
+    fn on_load(
+        grid: ResMut<Self>,
+        concentrations: ResMut<Concentrations<Self::Coords>>,
+        materials: Res<Self::Materials>,
+        commands: Commands,
+    );
+
+    /// Обновление морфогена
+    fn prepare(
+        grid: ResMut<Self>,
+        mut cells: Query<Mut<Self::Cell>>,
+        mut concentrations: ResMut<Concentrations<Self::Coords>>,
+    ) {
+        let data = grid.get_data();
+
+        for (coords, entity) in data {
+            let mut cell = cells.get_mut(*entity).unwrap();
+            let _type = cell.get_type();
+
+            for g in 0..GENS {
+                if !cell.gens()[g] {
+                    continue;
+                }
+                let Some(mgen) = _type.gens.get(&g) else {
+                    continue;
+                };
+
+                for c in coords.range(mgen.range) {
+                    if !data.contains_key(&c) {
+                        continue;
+                    };
+
+                    let prev = concentrations.get_mut(&c).unwrap();
+                    prev[g] = true;
+                }
+            }
+
+            for t in 0..TIMERS {
+                let v = cell.timers()[t];
+                if v == 0 {
+                    continue;
+                }
+
+                cell.set_timer(t, v - 1);
+            }
+        }
+    }
+
+    /// Проверяем все условия, запускаем и останавливаем гены, меняем типы клетки и даже реплецируем их.
+    /// Порядок проверок:
+    /// 1) Дифференцировка (!пропустить остальные этапы, если верно)
+    /// 2) Реплецирование клетки
+    /// 3) Проверка на запуск генов/таймеров
+    fn process(
+        grid: Res<Self>,
+        mut cells: Query<Mut<Self::Cell>>,
+        mut spawn_q: ResMut<SpawnQuery<Self::Coords, Self::Cell>>,
+        concentrations: Res<Concentrations<Self::Coords>>,
+    ) {
+        let mut rng = rand::rng();
+        let config = grid.get_config();
+
+        for (coords, entity) in grid.get_data() {
+            let mut cell = cells.get_mut(*entity).unwrap();
+            let _type = cell.get_type();
+            let n = grid.neighbors(coords);
+            let c = concentrations.get(&coords).unwrap();
+            let mut d = *cell.get_divide();
+
+            // Этап 1:
+            let mut skip = false;
+            for (new, condition) in &_type.changes {
+                if !condition.check(d, n, c, cell.timers(), &_type.name) {
+                    continue;
+                }
+
+                let Some(new_type) = config.types.get(new) else {
+                    warn!("Cell type is not found: {}", new);
+                    continue;
+                };
+
+                // Дифференцировка типа клетки
+                spawn_q.insert(*coords, Cell::new(new_type.clone()));
+                skip = true;
+                break;
+            }
+
+            if skip {
+                continue;
+            }
+
+            // Этап 2
+            *cell.get_divide() = match &_type.division {
+                Some(condition) => condition.check(d, n, c, cell.timers(), &_type.name),
+                None => false,
+            };
+            d = *cell.get_divide();
+
+            if d {
+                let neighbors = grid.empty_neighbors(coords);
+
+                if neighbors.len() != 0 {
+                    let nbr = neighbors.choose(&mut rng).unwrap();
+                    spawn_q.insert(*nbr, Cell::new(_type.clone()));
+                }
+            }
+
+            // Этап 3
+            for (g, mgen) in _type.gens.iter() {
+                cell.gens_mut()[*g] = mgen.condition.check(d, n, c, cell.timers(), &_type.name);
+            }
+
+            let mut timers = cell.timers().clone();
+            for (t, timer) in _type.timers.iter() {
+                if !timer.condition.check(d, n, c, cell.timers(), &_type.name) {
+                    continue;
+                }
+
+                timers[*t] = timer.time;
+            }
+
+            *cell.timers_mut() = timers;
+        }
+    }
+
+    fn spawn(
+        mut grid: ResMut<Self>,
+        mut commands: Commands,
+        materials: Res<Self::Materials>,
+        mut concentrations: ResMut<Concentrations<Self::Coords>>,
+        mut spawn_q: ResMut<SpawnQuery<Self::Coords, Self::Cell>>,
+    ) {
+        for (coord, cell) in spawn_q.get_mut().drain() {
+            if let Some(entity) =
+                grid.insert(&mut commands, &mut concentrations, &materials, coord, cell)
+            {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+
+    /// Получить клетку по координатам
+    fn get_data(&self) -> &HashMap<Self::Coords, Entity>;
+
+    /// Получить клетку по координатам
+    fn get(&self, coords: &Self::Coords) -> Option<&Entity>;
+
+    /// Добавить клетку в сетку по координатам
+    fn insert(
+        &mut self,
+        commands: &mut Commands,
+        concentations: &mut Concentrations<Self::Coords>,
+        materials: &Self::Materials,
+        coords: Self::Coords,
+        cell: Self::Cell,
+    ) -> Option<Entity>;
+
+    fn get_config(&self) -> Arc<Config>;
+
+    /// Количество соседей у данной клетки
+    fn neighbors(&self, coords: &Self::Coords) -> u8 {
+        let mut result = 0;
+        for d in <Self::Coords as Coords>::Dir::neighbors() {
+            result += self
+                .get(&coords.neighbor(d))
+                .and_then(|_| Some(1))
+                .unwrap_or(0);
+        }
+
+        result
+    }
+
+    /// Свободные соседи
+    fn empty_neighbors(&self, coords: &Self::Coords) -> Vec<Self::Coords> {
+        let mut result = Vec::with_capacity(16);
+        for d in <Self::Coords as Coords>::Dir::neighbors() {
+            let n = coords.neighbor(d);
+            if self.get(&n).is_some() {
+                continue;
+            }
+
+            result.push(n);
+        }
+
+        result
+    }
+
+    /// Система которая проверяет выбор объекта на сетке
+    fn select(
+        commands: Commands,
+        grid: ResMut<Self>,
+        materials: Res<Self::Materials>,
+        camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
+        origin: Single<Ref<Transform>, With<Self::Origin>>,
+        window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+        msb: Res<ButtonInput<MouseButton>>,
+    );
+
+    fn add_selection(
+        &mut self,
+        commands: &mut Commands,
+        materials: &Self::Materials,
+        coords: Self::Coords,
+    );
+
+    fn clear_selection(&mut self, commands: &mut Commands);
 }
