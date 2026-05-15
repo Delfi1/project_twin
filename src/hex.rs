@@ -1,7 +1,7 @@
 //! Гексагональная сетка реализованная с помощью базового трейта
 
 use super::grid::*;
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::{platform::collections::HashMap, prelude::*, window::*};
 use std::ops::Mul;
 use std::sync::Arc;
 
@@ -255,17 +255,12 @@ impl Controller for HexController {
     // Простой контроллер 2d камеры
     fn update(
         time: Res<Time>,
-        mut scroll: Local<f32>,
         kbd: Res<ButtonInput<KeyCode>>,
-        mut scroll_msg: MessageReader<bevy::input::mouse::MouseWheel>,
-        camera: Single<(Mut<Transform>, Mut<Projection>), With<Self>>,
+        camera: Single<(Mut<Transform>, Mut<Self>)>,
+        _cursor: Single<Mut<CursorOptions>, With<PrimaryWindow>>,
+        _mouse: MessageReader<bevy::input::mouse::MouseMotion>,
     ) {
-        let (mut transform, projection) = camera.into_inner();
-
-        for m in scroll_msg.read() {
-            *scroll -= m.y * Self::ZOOMING;
-        }
-        *scroll = scroll.clamp(-Self::SCROLL, Self::SCROLL);
+        let (mut camera, _) = camera.into_inner();
 
         let mut velocity = Vec3::ZERO;
         if kbd.pressed(KeyCode::KeyW) {
@@ -281,16 +276,8 @@ impl Controller for HexController {
             velocity.x += 1.0;
         }
 
-        let zoom = 1.0 + *scroll;
-        match *projection.into_inner() {
-            Projection::Orthographic(ref mut orthographic) => {
-                orthographic.scale = zoom;
-            }
-            _ => (),
-        };
-
         if velocity != Vec3::ZERO {
-            transform.translation += velocity.normalize() * Self::SPEED * time.delta_secs() * zoom;
+            camera.translation += velocity.normalize() * Self::SPEED * time.delta_secs();
         }
     }
 }
@@ -340,6 +327,7 @@ pub struct HexGrid {
 
     selected: Option<(HexCoords, Entity)>,
     data: HashMap<HexCoords, Entity>,
+    current_tick: u8,
 }
 
 impl Grid for HexGrid {
@@ -357,7 +345,16 @@ impl Grid for HexGrid {
             parent,
             selected: None,
             data,
+            current_tick: 128,
         }
+    }
+
+    fn get_tick(&self) -> u8 {
+        self.current_tick
+    }
+
+    fn get_tick_mut(&mut self) -> &mut u8 {
+        &mut self.current_tick
     }
 
     /// Двумерный мир с серым фоном
@@ -412,7 +409,7 @@ impl Grid for HexGrid {
             .id();
         commands.entity(self.parent).add_child(entity);
 
-        concentrations.insert(coords, [false; GENS]);
+        concentrations.insert(coords, [self.current_tick - 2; GENS]);
         self.data.insert(coords, entity)
     }
 

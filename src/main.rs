@@ -2,7 +2,7 @@
 //! Симуляция Онтогенеза растения; The influence of water and light on growth;
 mod grid;
 mod hex;
-//mod rdd;
+mod rdd;
 
 use crate::grid::*;
 use bevy::{
@@ -11,8 +11,11 @@ use bevy::{
 };
 use std::sync::Arc;
 
-// Set current simulation type as Hex
-pub type Simulation = hex::HexGrid;
+use hex::HexGrid;
+use rdd::RddGrid;
+
+// Set current simulation type
+pub type Simulation = HexGrid;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
 enum SimulationState {
@@ -84,7 +87,12 @@ pub fn main() {
         )
         .add_systems(
             FixedUpdate,
-            (Simulation::prepare, Simulation::process, Simulation::spawn)
+            (
+                Simulation::tick,
+                Simulation::prepare,
+                Simulation::process,
+                Simulation::spawn,
+            )
                 .chain()
                 .run_if(in_state(SimulationState::World)),
         )
@@ -94,7 +102,10 @@ pub fn main() {
         )
         .add_systems(
             Update,
-            <Simulation as Grid>::Controller::update
+            (
+                <Simulation as Grid>::Controller::update,
+                <Simulation as Grid>::Controller::scroll,
+            )
                 .run_if(not(in_state(SimulationState::Loading))),
         )
         .add_systems(OnExit(SimulationState::Loading), Simulation::on_load)

@@ -1,6 +1,6 @@
 pub mod config;
 
-use bevy::{platform::collections::HashMap, prelude::*};
+use bevy::{platform::collections::HashMap, prelude::*, window::*};
 pub use config::*;
 use rand::prelude::*;
 use std::sync::Arc;
@@ -38,19 +38,40 @@ pub trait Cell: Sized + Clone + Component<Mutability = bevy::ecs::component::Mut
 }
 
 /// Контроллер камеры для сетки
-pub trait Controller: Component + Sized {
+pub trait Controller: Component<Mutability = bevy::ecs::component::Mutable> + Sized {
     const SPEED: f32 = 200.0;
     const ZOOMING: f32 = 0.1;
     const SCROLL: f32 = 0.8;
+    const SENSITIVITY: f32 = 0.002;
 
     // Обновление контроллера через Bevy
     fn update(
         time: Res<Time>,
-        scroll: Local<f32>,
         kbd: Res<ButtonInput<KeyCode>>,
-        scroll_msg: MessageReader<bevy::input::mouse::MouseWheel>,
-        camera: Single<(Mut<Transform>, Mut<Projection>), With<Self>>,
+        camera: Single<(Mut<Transform>, Mut<Self>)>,
+        cursor: Single<Mut<CursorOptions>, With<PrimaryWindow>>,
+        mouse: MessageReader<bevy::input::mouse::MouseMotion>,
     );
+
+    fn scroll(
+        mut scroll_msg: MessageReader<bevy::input::mouse::MouseWheel>,
+        mut scroll: Local<f32>,
+        projection: Single<Mut<Projection>, With<Self>>,
+    ) {
+        for m in scroll_msg.read() {
+            *scroll -= m.y * Self::ZOOMING;
+        }
+
+        *scroll = scroll.clamp(-Self::SCROLL, Self::SCROLL);
+
+        let zoom = 1.0 + *scroll;
+        match *projection.into_inner() {
+            Projection::Orthographic(ref mut orthographic) => {
+                orthographic.scale = zoom;
+            }
+            _ => (),
+        };
+    }
 }
 
 #[derive(Resource)]
@@ -78,7 +99,7 @@ impl<C: Coords, T: Cell> SpawnQuery<C, T> {
 
 #[derive(Resource)]
 /// Концентрация морфогена в межклеточном веществе определенной клетки.
-pub struct Concentrations<C: Coords>(HashMap<C, [bool; GENS]>);
+pub struct Concentrations<C: Coords>(HashMap<C, [u8; GENS]>);
 
 unsafe impl<C: Coords> Send for Concentrations<C> {}
 unsafe impl<C: Coords> Sync for Concentrations<C> {}
@@ -90,15 +111,15 @@ impl<C: Coords> Default for Concentrations<C> {
 }
 
 impl<C: Coords> Concentrations<C> {
-    pub fn insert(&mut self, coords: C, values: [bool; GENS]) {
+    pub fn insert(&mut self, coords: C, values: [u8; GENS]) {
         self.0.insert(coords, values);
     }
 
-    pub fn get(&self, coords: &C) -> Option<&[bool; GENS]> {
+    pub fn get(&self, coords: &C) -> Option<&[u8; GENS]> {
         self.0.get(coords)
     }
 
-    pub fn get_mut(&mut self, coords: &C) -> Option<&mut [bool; GENS]> {
+    pub fn get_mut(&mut self, coords: &C) -> Option<&mut [u8; GENS]> {
         self.0.get_mut(coords)
     }
 }
@@ -112,6 +133,14 @@ pub trait Grid: Resource {
     type Materials: Resource + FromWorld;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self;
+
+    fn get_tick(&self) -> u8;
+
+    fn get_tick_mut(&mut self) -> &mut u8;
+
+    fn tick(mut grid: ResMut<Self>) {
+        *grid.get_tick_mut() = grid.get_tick().wrapping_add(1);
+    }
 
     fn firstly(commands: &mut Commands) {
         commands.init_resource::<SpawnQuery<Self::Coords, Self::Cell>>();
@@ -136,6 +165,7 @@ pub trait Grid: Resource {
         mut concentrations: ResMut<Concentrations<Self::Coords>>,
     ) {
         let data = grid.get_data();
+        let t = grid.get_tick();
 
         for (coords, entity) in data {
             let mut cell = cells.get_mut(*entity).unwrap();
@@ -155,17 +185,17 @@ pub trait Grid: Resource {
                     };
 
                     let prev = concentrations.get_mut(&c).unwrap();
-                    prev[g] = true;
+                    prev[g] = t;
                 }
             }
 
-            for t in 0..TIMERS {
-                let v = cell.timers()[t];
+            for timer in 0..TIMERS {
+                let v = cell.timers()[timer];
                 if v == 0 {
                     continue;
                 }
 
-                cell.set_timer(t, v - 1);
+                cell.set_timer(timer, v - 1);
             }
         }
     }
@@ -183,6 +213,7 @@ pub trait Grid: Resource {
     ) {
         let mut rng = rand::rng();
         let config = grid.get_config();
+        let t = grid.get_tick();
 
         for (coords, entity) in grid.get_data() {
             let mut cell = cells.get_mut(*entity).unwrap();
@@ -194,7 +225,7 @@ pub trait Grid: Resource {
             // Этап 1:
             let mut skip = false;
             for (new, condition) in &_type.changes {
-                if !condition.check(d, n, c, cell.timers(), &_type.name) {
+                if !condition.check(d, n, c, cell.timers(), &_type.name, t) {
                     continue;
                 }
 
@@ -215,7 +246,7 @@ pub trait Grid: Resource {
 
             // Этап 2
             *cell.get_divide() = match &_type.division {
-                Some(condition) => condition.check(d, n, c, cell.timers(), &_type.name),
+                Some(condition) => condition.check(d, n, c, cell.timers(), &_type.name, t),
                 None => false,
             };
             d = *cell.get_divide();
@@ -231,16 +262,19 @@ pub trait Grid: Resource {
 
             // Этап 3
             for (g, mgen) in _type.gens.iter() {
-                cell.gens_mut()[*g] = mgen.condition.check(d, n, c, cell.timers(), &_type.name);
+                cell.gens_mut()[*g] = mgen.condition.check(d, n, c, cell.timers(), &_type.name, t);
             }
 
             let mut timers = cell.timers().clone();
-            for (t, timer) in _type.timers.iter() {
-                if !timer.condition.check(d, n, c, cell.timers(), &_type.name) {
+            for (tm, timer) in _type.timers.iter() {
+                if !timer
+                    .condition
+                    .check(d, n, c, cell.timers(), &_type.name, t)
+                {
                     continue;
                 }
 
-                timers[*t] = timer.time;
+                timers[*tm] = timer.time;
             }
 
             *cell.timers_mut() = timers;

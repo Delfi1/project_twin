@@ -82,12 +82,13 @@ impl ConditionType {
         &self,
         d: bool,
         n: u8,
-        c: &[bool; GENS],
+        c: &[u8; GENS],
         t: &[u8; TIMERS],
         _type: &String,
+        tick: u8,
     ) -> bool {
         let result = match &self.v {
-            ConditionValue::M(i) => c[*i as usize],
+            ConditionValue::M(i) => tick.wrapping_sub(c[*i as usize]) < 2,
             ConditionValue::T(i) => t[*i as usize] > 0,
             ConditionValue::IsType(v) => v == _type,
             ConditionValue::Neighbors(v) => n == *v,
@@ -155,13 +156,14 @@ impl Condition {
         &self,
         d: bool,
         n: u8,
-        c: &[bool; GENS],
+        c: &[u8; GENS],
         t: &[u8; TIMERS],
         _type: &String,
+        tick: u8,
     ) -> bool {
         // Если хотя-бы один деактиватор (подавляющий ген) активен, то пропускаем проверки
         for v in &self.deactivators {
-            let result = v.iter().all(|cv| cv.check(d, n, c, t, _type));
+            let result = v.iter().all(|cv| cv.check(d, n, c, t, _type, tick));
 
             if result {
                 return false;
@@ -170,7 +172,7 @@ impl Condition {
 
         // Если все значения активатора верны, то возвращается true. Иначе проверяем дальше.
         for v in &self.activators {
-            let result = v.iter().all(|cv| cv.check(d, n, c, t, _type));
+            let result = v.iter().all(|cv| cv.check(d, n, c, t, _type, tick));
 
             if result {
                 return true;
@@ -326,6 +328,11 @@ impl AssetLoader for ConfigLoader {
                 }
                 _ => (),
             }
+        }
+
+        if cell.is_some() {
+            let value: CellType = cell.take().unwrap();
+            config.types.insert(value.name.clone(), Arc::new(value));
         }
 
         Ok(config)

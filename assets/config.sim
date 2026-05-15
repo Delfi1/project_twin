@@ -1,11 +1,11 @@
 <Stem>
 M0(0): [M0] [Type(Stem), n(0)]
-M6(2): [Type(Stem), M0]
+M6(1): [Type(Stem), M0]
 
 T0(8): [M0] {!Type(Stem)}
-D: [*] {!M6}
+D: [M6]
 Color: #FDF5E6
-Change(Flesh): [M6, !T0]
+Change(Flesh): [M6, !M0]
 
 <Skin>
 M0(0): {M0}
@@ -13,6 +13,7 @@ Color: #F1D08A
 
 <Flesh>
 M0(0): {M0}
+M1(1): [!M0]
 Color: #F1D08A
 
 <Blade>
