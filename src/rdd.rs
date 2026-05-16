@@ -1,5 +1,4 @@
 use bevy::ecs::component::Component;
-use std::ops::Mul;
 
 use super::grid::*;
 use bevy::asset::RenderAssetUsages;
@@ -51,7 +50,6 @@ impl Direction for RddDirection {
     }
 }
 
-pub const SIZE: f32 = 1.0;
 pub const SQRT2: f32 = 1.41421;
 
 pub struct RangeIter {
@@ -152,8 +150,8 @@ impl RddCoords {
         Self { x, y, z }
     }
 
-    pub fn to_local(x: f32, y: f32, z: f32) -> Vec3 {
-        Vec3::new((2. * y - z) / SQRT2, (-2. * x + z) / SQRT2, z).mul(SIZE)
+    fn to_cartesian(x: f32, y: f32, z: f32) -> Vec3 {
+        Vec3::new((2. * y - z) / SQRT2, (-2. * x + z) / SQRT2, z)
     }
 }
 
@@ -166,7 +164,7 @@ impl Coords for RddCoords {
         let y = self.y as f32;
         let z = self.z as f32;
 
-        Vec3::new((2. * y - z) / SQRT2, (-2. * x + z) / SQRT2, z).mul(SIZE)
+        Self::to_cartesian(x, y, z)
     }
 
     fn neighbor(&self, dir: &Self::Dir) -> Self {
@@ -180,11 +178,11 @@ impl Coords for RddCoords {
             Self::Dir::Up => Self::new(self.x, self.y + 1, self.z),
             Self::Dir::UpNorthEast => Self::new(self.x + 1, self.y + 1, self.z + 1),
             Self::Dir::UpNorth => Self::new(self.x, self.y + 1, self.z + 1),
-            Self::Dir::UpEast => Self::new(self.x + 1, self.y + 1, self.z),
+            Self::Dir::UpEast => Self::new(self.x + 1, self.y, self.z + 1),
 
             Self::Dir::Down => Self::new(self.x, self.y - 1, self.z),
             Self::Dir::DownSouthWest => Self::new(self.x - 1, self.y - 1, self.z - 1),
-            Self::Dir::DownWest => Self::new(self.x - 1, self.y - 1, self.z),
+            Self::Dir::DownWest => Self::new(self.x - 1, self.y, self.z - 1),
             Self::Dir::DownSouth => Self::new(self.x, self.y - 1, self.z - 1),
         }
     }
@@ -259,7 +257,7 @@ pub struct RddController {
 }
 
 impl Controller for RddController {
-    const SPEED: f32 = 50.0;
+    const SPEED: f32 = 20.0;
 
     fn update(
         time: Res<Time>,
@@ -340,36 +338,41 @@ pub struct RddMaterials {
 }
 
 impl RddMaterials {
+    pub const U: f32 = 0.25;
+    pub const U2: f32 = 0.5;
+    pub const U3: f32 = 0.75;
+    pub const U4: f32 = 1.0;
+
     pub const VERTICES: [[f32; 3]; 14] = [
-        [-4.0, 0.0, 0.0],   // 0
-        [-2.0, 2.0, -2.0],  // 1
-        [0.0, 4.0, 0.0],    // 2
-        [-2.0, 2.0, 2.0],   // 3
-        [-2.0, -2.0, -2.0], // 4
-        [0.0, 0.0, -4.0],   // 5
-        [2.0, 2.0, -2.0],   // 6
-        [2.0, 2.0, 2.0],    // 7
-        [4.0, 0.0, 0.0],    // 8
-        [0.0, 0.0, 4.0],    // 9
-        [-2.0, -2.0, 2.0],  // 10
-        [0.0, -4.0, 0.0],   // 11
-        [2.0, -2.0, 2.0],   // 12
-        [2.0, -2.0, -2.0],  // 13
+        [-Self::U2, -Self::U2, 0.0],       // 0
+        [-Self::U3, -Self::U, -Self::U2],  // 1
+        [-Self::U2, Self::U2, 0.0],        // 2
+        [-Self::U, Self::U, Self::U2],     // 3
+        [-Self::U, -Self::U3, -Self::U2],  // 4
+        [-Self::U2, -Self::U2, -Self::U4], // 5
+        [-Self::U, Self::U, -Self::U2],    // 6
+        [Self::U, Self::U3, Self::U2],     // 7
+        [Self::U2, Self::U2, 0.0],         // 8
+        [Self::U2, Self::U2, Self::U4],    // 9
+        [Self::U, -Self::U, Self::U2],     // 10
+        [Self::U2, -Self::U2, 0.0],        // 11
+        [Self::U3, Self::U, Self::U2],     // 12
+        [Self::U, -Self::U, -Self::U2],    // 13
     ];
 
     pub const INDICIES: [u32; 72] = [
-        0, 2, 1, 0, 2, 3, // f1
-        1, 4, 0, 1, 4, 5, // f2
-        2, 5, 1, 2, 5, 6, // f3
-        2, 8, 6, 2, 8, 7, // f4
-        9, 2, 7, 9, 2, 3, // f5
-        10, 3, 0, 10, 3, 9, // f6
-        9, 11, 10, 9, 11, 12, // f7
-        7, 12, 9, 7, 12, 8, // f8
-        10, 4, 0, 10, 4, 11, // f9
-        11, 5, 4, 11, 5, 13, // f10
-        8, 5, 13, 8, 5, 6, // f11
-        8, 11, 12, 8, 11, 13, // f12
+        9, 0, 10, 9, 3, 0, // f1
+        9, 2, 3, 9, 7, 2, // f2
+        9, 8, 7, 9, 12, 8, // f3
+        9, 11, 12, 9, 10, 11, // f4
+        0, 11, 10, 11, 0, 4, // f5
+        2, 8, 6, 8, 2, 7, // f6
+        0, 2, 1, 0, 3, 2, // f7
+        12, 11, 8, 8, 11, 13, // f8
+        1, 5, 0, 0, 5, 4, // f9
+        5, 2, 6, 2, 5, 1, // f10
+        5, 8, 13, 8, 5, 6, // f11
+        5, 11, 4, 11, 5, 13, // f12
     ];
 
     pub fn raw_mesh() -> Mesh {
@@ -379,13 +382,11 @@ impl RddMaterials {
         );
 
         let mut vertices = Vec::with_capacity(Self::VERTICES.len());
-        for v in Self::VERTICES {
-            vertices.push(Vec3::from(v));
+        for [x, y, z] in Self::VERTICES {
+            vertices.push(RddCoords::to_cartesian(x, y, z));
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-
-        let indices = Vec::from(Self::INDICIES);
-        mesh.insert_indices(Indices::U32(indices));
+        mesh.insert_indices(Indices::U32(Self::INDICIES.into()));
 
         mesh.duplicate_vertices();
         mesh.compute_flat_normals();
@@ -460,6 +461,10 @@ impl Grid for RddGrid {
         let transform = Transform::from_translation(Vec3::ONE).looking_at(Vec3::ZERO, Vec3::ZERO);
         commands.spawn((Camera3d::default(), RddController::default(), transform));
         commands.insert_resource(ClearColor(Color::srgb_u8(43, 43, 43)));
+        commands.spawn((
+            DirectionalLight::default(),
+            Transform::from_translation(Vec3::new(5.0, 2.0, 5.0)).looking_at(Vec3::ZERO, Vec3::Y),
+        ));
     }
 
     fn on_load(
@@ -472,10 +477,14 @@ impl Grid for RddGrid {
 
         let coords = Self::Coords::ORIGIN;
         let _type = grid.config.types.get(&grid.config.default).unwrap().clone();
-        let mut cell = RddCell::new(_type);
+        let mut cell = RddCell::new(_type.clone());
         cell.gens[0] = true;
 
+        //let c2 = coords.neighbor(&RddDirection::Up);
         grid.insert(&mut commands, &mut concentrations, &materials, coords, cell);
+
+        //let cl2 = RddCell::new(_type);
+        //grid.insert(&mut commands, &mut concentrations, &materials, c2, cl2);
     }
 
     fn get_data(&self) -> &HashMap<Self::Coords, Entity> {
@@ -502,7 +511,7 @@ impl Grid for RddGrid {
                 cell,
                 materials.mesh.clone(),
                 material.clone(),
-                Transform::from_translation(pos).with_scale(Vec3::splat(0.9)),
+                Transform::from_translation(pos),
             ))
             .id();
 

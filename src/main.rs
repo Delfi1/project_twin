@@ -15,7 +15,7 @@ use hex::HexGrid;
 use rdd::RddGrid;
 
 // Set current simulation type
-pub type Simulation = HexGrid;
+pub type Simulation = RddGrid;
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash)]
 enum SimulationState {
@@ -48,7 +48,10 @@ fn load_config(
         info!("Config loaded...");
 
         let parent = commands
-            .spawn((<Simulation as Grid>::Origin::default(), Transform::IDENTITY))
+            .spawn((
+                <Simulation as Grid>::Origin::default(),
+                //todo: Transform::IDENTITY.with_scale(Vec3::splat(0.01)),
+            ))
             .id();
 
         commands.insert_resource(Simulation::new(parent, Arc::new(config)));
