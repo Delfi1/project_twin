@@ -11,7 +11,7 @@ pub trait Direction: Sized + Clone + Copy + Default {
     //fn random() -> Self;
 }
 
-pub trait Coords: Clone + Copy + std::hash::Hash + Eq + PartialEq {
+pub trait Coords: Component + Clone + Copy + std::hash::Hash + Eq + PartialEq {
     type Dir: Direction;
     type Iter: Iterator<Item = Self>;
 
@@ -124,15 +124,30 @@ impl<C: Coords> Concentrations<C> {
     }
 }
 
+pub trait Materials: Resource + FromWorld {
+    type Mesh: Component;
+    type Material: Component;
+
+    fn mesh(&self) -> Self::Mesh;
+    fn material(&self, _type: Arc<CellType>) -> Self::Material;
+    fn hovered_material(&self) -> Self::Material;
+
+    // On selection
+    fn selected_mesh(&self) -> Self::Mesh;
+    fn selected_material(&self) -> Self::Material;
+}
+
 /// Основной абстрактный класс для работы с сеткой
 pub trait Grid: Resource {
     type Cell: Cell;
     type Coords: Coords;
     type Origin: Component + FromWorld;
     type Controller: Controller;
-    type Materials: Resource + FromWorld;
+    type Materials: Materials;
 
     fn new(parent: Entity, config: Arc<Config>) -> Self;
+
+    fn get_parent(&self) -> Entity;
 
     fn get_tick(&self) -> u8;
 
@@ -343,23 +358,66 @@ pub trait Grid: Resource {
         result
     }
 
+    fn on_out(
+        ev: On<Pointer<Out>>,
+        grid: Res<Self>,
+        mut commands: Commands,
+        coords: Query<Ref<Self::Coords>>,
+        cells: Query<Ref<Self::Cell>>,
+        materials: Res<Self::Materials>,
+    ) {
+        let child = ev.event_target();
+        let Ok(coords) = coords.get(child) else {
+            return;
+        };
+        let entity = grid.get(&coords).cloned().unwrap();
+        let cell = cells.get(entity).unwrap();
+
+        if let Some(prev) = grid.get_selected() {
+            if entity.eq(prev) {
+                return;
+            }
+        }
+
+        commands
+            .entity(entity)
+            .insert(materials.material(cell.get_type()));
+    }
+
     /// Система которая проверяет выбор объекта на сетке
-    fn select(
+    fn on_hover(
+        ev: On<Pointer<Over>>,
+        grid: Res<Self>,
+        mut commands: Commands,
+        coords: Query<Ref<Self::Coords>>,
+        materials: Res<Self::Materials>,
+    ) {
+        let child = ev.event_target();
+        let Ok(coords) = coords.get(child) else {
+            return;
+        };
+        let cell = grid.get(&coords).cloned().unwrap();
+
+        commands.entity(cell).insert(materials.hovered_material());
+    }
+
+    fn get_selected(&self) -> Option<&Entity>;
+    fn take_selected(&mut self) -> Option<Entity>;
+
+    fn on_select(
+        ev: On<Pointer<Press>>,
+        grid: ResMut<Self>,
+        commands: Commands,
+        coords: Query<Ref<Self::Coords>>,
+        cells: Query<Ref<Self::Cell>>,
+        materials: Res<Self::Materials>,
+    );
+
+    fn unselect(
         commands: Commands,
         grid: ResMut<Self>,
-        materials: Res<Self::Materials>,
-        camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
-        origin: Single<Ref<Transform>, With<Self::Origin>>,
-        window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+        cells: Query<Ref<Self::Cell>>,
         msb: Res<ButtonInput<MouseButton>>,
+        materials: Res<Self::Materials>,
     );
-
-    fn add_selection(
-        &mut self,
-        commands: &mut Commands,
-        materials: &Self::Materials,
-        coords: Self::Coords,
-    );
-
-    fn clear_selection(&mut self, commands: &mut Commands);
 }

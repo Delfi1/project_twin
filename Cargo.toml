@@ -13,6 +13,8 @@ features = [
     "multi_threaded",
     "async_executor",
     "default_font",
+    "bevy_picking",
+    "mesh_picking",
     "bevy_render",
     "bevy_camera",
     "bevy_sprite",

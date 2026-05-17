@@ -48,10 +48,7 @@ fn load_config(
         info!("Config loaded...");
 
         let parent = commands
-            .spawn((
-                <Simulation as Grid>::Origin::default(),
-                //todo: Transform::IDENTITY.with_scale(Vec3::splat(0.01)),
-            ))
+            .spawn((<Simulation as Grid>::Origin::default(), Transform::IDENTITY))
             .id();
 
         commands.insert_resource(Simulation::new(parent, Arc::new(config)));
@@ -79,6 +76,11 @@ fn switch_fullscreen(
 pub fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(MeshPickingPlugin)
+        .insert_resource(MeshPickingSettings {
+            ray_cast_visibility: RayCastVisibility::Any,
+            ..default()
+        })
         .insert_resource(Time::<Fixed>::from_seconds(0.25))
         .insert_state(SimulationState::Loading)
         .init_asset::<grid::Config>()
@@ -100,8 +102,8 @@ pub fn main() {
                 .run_if(in_state(SimulationState::World)),
         )
         .add_systems(
-            PostUpdate,
-            Simulation::select.run_if(in_state(SimulationState::World)),
+            PreUpdate,
+            Simulation::unselect.run_if(in_state(SimulationState::World)),
         )
         .add_systems(
             Update,

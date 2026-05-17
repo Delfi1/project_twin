@@ -112,7 +112,7 @@ impl Iterator for RangeIter {
     }
 }
 
-#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Component, Debug, Copy, Hash, PartialEq, Eq)]
 pub struct RddCoords {
     x: isize,
     y: isize,
@@ -332,8 +332,8 @@ impl Controller for RddController {
 #[derive(Resource)]
 pub struct RddMaterials {
     pub mesh: Mesh3d,
-    //pub selected_mesh: Mesh3d,
-    //pub selected_material: MeshMaterial3d<StandardMaterial>,
+    pub hover_material: MeshMaterial3d<StandardMaterial>,
+    pub selected_material: MeshMaterial3d<StandardMaterial>,
     pub materials: HashMap<String, MeshMaterial3d<StandardMaterial>>,
 }
 
@@ -413,7 +413,42 @@ impl FromWorld for RddMaterials {
             materials.insert(name.clone(), MeshMaterial3d(material));
         }
 
-        Self { mesh, materials }
+        let hover = StandardMaterial::from_color(Color::srgb_u8(0, 99, 177));
+        let hover_material = MeshMaterial3d(color_materials.add(hover));
+        let selected = StandardMaterial::from_color(Color::srgb_u8(0, 120, 215));
+        let selected_material = MeshMaterial3d(color_materials.add(selected));
+
+        Self {
+            mesh,
+            hover_material,
+            selected_material,
+            materials,
+        }
+    }
+}
+
+impl Materials for RddMaterials {
+    type Mesh = Mesh3d;
+    type Material = MeshMaterial3d<StandardMaterial>;
+
+    fn mesh(&self) -> Self::Mesh {
+        self.mesh.clone()
+    }
+
+    fn material(&self, _type: Arc<CellType>) -> Self::Material {
+        self.materials.get(&_type.name).cloned().unwrap()
+    }
+
+    fn hovered_material(&self) -> Self::Material {
+        self.hover_material.clone()
+    }
+
+    fn selected_mesh(&self) -> Self::Mesh {
+        self.mesh.clone()
+    }
+
+    fn selected_material(&self) -> Self::Material {
+        self.selected_material.clone()
     }
 }
 
@@ -425,7 +460,7 @@ pub struct RddGrid {
     pub config: Arc<Config>,
     parent: Entity,
 
-    _selected: Option<(RddCoords, Entity)>,
+    selected: Option<Entity>,
     data: HashMap<RddCoords, Entity>,
     current_tick: u8,
 }
@@ -443,10 +478,14 @@ impl Grid for RddGrid {
         Self {
             config,
             parent,
-            _selected: None,
+            selected: None,
             data,
             current_tick: 128,
         }
+    }
+
+    fn get_parent(&self) -> Entity {
+        self.parent
     }
 
     fn get_tick(&self) -> u8 {
@@ -503,16 +542,21 @@ impl Grid for RddGrid {
         coords: Self::Coords,
         cell: Self::Cell,
     ) -> Option<Entity> {
-        let material = materials.materials.get(&cell._type.name).unwrap();
+        let material = materials.material(cell._type.clone());
         let pos = coords.to_world();
 
         let entity = commands
             .spawn((
                 cell,
-                materials.mesh.clone(),
-                material.clone(),
+                coords,
+                materials.mesh(),
+                material,
                 Transform::from_translation(pos),
+                Pickable::default(),
             ))
+            .observe(Self::on_select)
+            .observe(Self::on_hover)
+            .observe(Self::on_out)
             .id();
 
         commands.entity(self.parent).add_child(entity);
@@ -521,36 +565,56 @@ impl Grid for RddGrid {
         self.data.insert(coords, entity)
     }
 
-    fn get_config(&self) -> Arc<Config> {
-        self.config.clone()
+    fn get_selected(&self) -> Option<&Entity> {
+        self.selected.as_ref()
     }
 
-    fn select(
-        mut _commands: Commands,
-        mut _grid: ResMut<Self>,
-        _materials: Res<Self::Materials>,
-        _camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
-        _origin: Single<Ref<Transform>, With<Self::Origin>>,
-        _window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
-        _msb: Res<ButtonInput<MouseButton>>,
+    fn take_selected(&mut self) -> Option<Entity> {
+        self.selected.take()
+    }
+
+    fn on_select(
+        ev: On<Pointer<Press>>,
+        mut grid: ResMut<Self>,
+        mut commands: Commands,
+        _: Query<Ref<Self::Coords>>,
+        cells: Query<Ref<Self::Cell>>,
+        materials: Res<Self::Materials>,
     ) {
-        // todo
-    }
+        let entity = ev.event_target();
+        let cell = cells.get(entity).unwrap();
 
-    fn add_selection(
-        &mut self,
-        _commands: &mut Commands,
-        _materials: &Self::Materials,
-        _coords: Self::Coords,
-    ) {
-        // todo
-    }
-
-    fn clear_selection(&mut self, commands: &mut Commands) {
-        if let Some((_, entity)) = self._selected {
-            commands.entity(entity).despawn();
+        if let Some(prev) = grid.take_selected() {
+            commands
+                .entity(prev)
+                .insert(materials.material(cell._type.clone()));
         }
 
-        self._selected = None;
+        commands
+            .entity(entity)
+            .insert((materials.selected_material(), materials.selected_mesh()));
+        grid.selected = Some(entity);
+    }
+
+    fn unselect(
+        mut commands: Commands,
+        mut grid: ResMut<Self>,
+        cells: Query<Ref<Self::Cell>>,
+        msb: Res<ButtonInput<MouseButton>>,
+        materials: Res<Self::Materials>,
+    ) {
+        if msb.just_pressed(MouseButton::Right) {
+            if let Some(prev) = grid.take_selected() {
+                let cell = cells.get(prev).unwrap();
+
+                commands
+                    .entity(prev)
+                    .insert(materials.material(cell._type.clone()));
+            }
+        }
+    }
+
+    fn get_config(&self) -> Arc<Config> {
+        self.config.clone()
     }
 }

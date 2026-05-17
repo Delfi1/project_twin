@@ -98,7 +98,7 @@ impl Iterator for RangeIter {
     }
 }
 
-#[derive(Clone, Debug, Copy, Hash, PartialEq, Eq)]
+#[derive(Component, Clone, Debug, Copy, Hash, PartialEq, Eq)]
 pub struct HexCoords {
     q: isize,
     r: isize,
@@ -132,7 +132,7 @@ impl std::ops::Add<isize> for HexCoords {
 impl HexCoords {
     pub const ORIGIN: Self = Self::new(0, 0);
 
-    pub const fn round(q0: f32, r0: f32, s0: f32) -> Self {
+    pub const fn _round(q0: f32, r0: f32, s0: f32) -> Self {
         let mut q = q0.round();
         let mut r = r0.round();
         let s = s0.round();
@@ -286,6 +286,7 @@ impl Controller for HexController {
 pub struct HexMaterials {
     pub mesh: Mesh2d,
     pub selected_mesh: Mesh2d,
+    pub hover_material: MeshMaterial2d<ColorMaterial>,
     pub selected_material: MeshMaterial2d<ColorMaterial>,
     pub materials: HashMap<String, MeshMaterial2d<ColorMaterial>>,
 }
@@ -306,14 +307,41 @@ impl FromWorld for HexMaterials {
             materials.insert(name.clone(), MeshMaterial2d(material));
         }
 
+        let hover_material = MeshMaterial2d(color_materials.add(Color::srgb_u8(65, 99, 177)));
         let selected_material = MeshMaterial2d(color_materials.add(Color::srgb_u8(0, 120, 215)));
 
         Self {
             mesh,
+            hover_material,
             selected_mesh,
             selected_material,
             materials,
         }
+    }
+}
+
+impl Materials for HexMaterials {
+    type Mesh = Mesh2d;
+    type Material = MeshMaterial2d<ColorMaterial>;
+
+    fn mesh(&self) -> Self::Mesh {
+        self.mesh.clone()
+    }
+
+    fn material(&self, _type: Arc<CellType>) -> Self::Material {
+        self.materials.get(&_type.name.clone()).cloned().unwrap()
+    }
+
+    fn hovered_material(&self) -> Self::Material {
+        self.hover_material.clone()
+    }
+
+    fn selected_mesh(&self) -> Self::Mesh {
+        self.selected_mesh.clone()
+    }
+
+    fn selected_material(&self) -> Self::Material {
+        self.selected_material.clone()
     }
 }
 
@@ -325,7 +353,7 @@ pub struct HexGrid {
     pub config: Arc<Config>,
     parent: Entity,
 
-    selected: Option<(HexCoords, Entity)>,
+    selected: Option<Entity>,
     data: HashMap<HexCoords, Entity>,
     current_tick: u8,
 }
@@ -347,6 +375,10 @@ impl Grid for HexGrid {
             data,
             current_tick: 128,
         }
+    }
+
+    fn get_parent(&self) -> Entity {
+        self.parent
     }
 
     fn get_tick(&self) -> u8 {
@@ -396,91 +428,80 @@ impl Grid for HexGrid {
         cell: Self::Cell,
     ) -> Option<Entity> {
         let material = materials.materials.get(&cell._type.name).unwrap();
-
         let pos = coords.to_world();
 
         let entity = commands
             .spawn((
                 cell,
-                materials.mesh.clone(),
+                materials.mesh(),
                 material.clone(),
                 Transform::from_translation(pos).with_scale(Vec3::splat(0.9)),
+                Pickable::IGNORE,
             ))
+            .with_children(|p| {
+                p.spawn((
+                    coords,
+                    materials.selected_mesh(),
+                    materials.selected_material(),
+                    Transform::from_translation(Vec3::ZERO.with_z(-1.0))
+                        .with_scale(Vec3::splat(10. / 9.)),
+                    Visibility::Hidden,
+                ))
+                .observe(Self::on_select)
+                .observe(Self::on_hover)
+                .observe(Self::on_out);
+            })
             .id();
-        commands.entity(self.parent).add_child(entity);
 
+        commands.entity(self.parent).add_child(entity);
         concentrations.insert(coords, [self.current_tick - 2; GENS]);
         self.data.insert(coords, entity)
     }
 
-    fn get_config(&self) -> Arc<Config> {
-        self.config.clone()
+    fn get_selected(&self) -> Option<&Entity> {
+        self.selected.as_ref()
     }
 
-    fn select(
+    fn take_selected(&mut self) -> Option<Entity> {
+        self.selected.take()
+    }
+
+    fn on_select(
+        ev: On<Pointer<Press>>,
+        mut grid: ResMut<Self>,
+        mut commands: Commands,
+        coords: Query<Ref<Self::Coords>>,
+        _: Query<Ref<Self::Cell>>,
+        _: Res<Self::Materials>,
+    ) {
+        let child = ev.event_target();
+        let Ok(_) = coords.get(child) else {
+            return;
+        };
+
+        if let Some(prev) = grid.take_selected() {
+            commands.entity(prev).insert(Visibility::Hidden);
+        }
+        commands.entity(child).insert(Visibility::Inherited);
+        grid.selected = Some(child);
+    }
+
+    fn unselect(
         mut commands: Commands,
         mut grid: ResMut<Self>,
-        materials: Res<Self::Materials>,
-        camera: Single<(Ref<Camera>, Ref<GlobalTransform>), With<Self::Controller>>,
-        origin: Single<Ref<Transform>, With<Self::Origin>>,
-        window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+        cells: Query<Ref<Self::Cell>>,
+
         msb: Res<ButtonInput<MouseButton>>,
+        _: Res<Self::Materials>,
     ) {
-        let (camera, camera_transform) = camera.into_inner();
-
         if msb.just_pressed(MouseButton::Right) {
-            grid.clear_selection(&mut commands);
-            return;
+            if let Some(prev) = grid.take_selected() {
+                commands.entity(prev).insert(Visibility::Hidden);
+            }
         }
-
-        if !msb.just_pressed(MouseButton::Left) {
-            return;
-        }
-
-        let cursor = window.cursor_position().unwrap();
-        let viewport = camera
-            .viewport_to_world_2d(&camera_transform, cursor)
-            .unwrap()
-            - origin.translation.xy();
-
-        let x = (viewport.x) / SIZE;
-        let y = (viewport.y) / SIZE;
-        let q0 = x * SQRT3 / 3. - y / 3.;
-        let r0 = y * 2. / 3.;
-        let s0 = -q0 - r0;
-
-        let coords = HexCoords::round(q0, r0, s0);
-        grid.add_selection(&mut commands, &materials, coords);
     }
 
-    fn add_selection(
-        &mut self,
-        commands: &mut Commands,
-        materials: &Self::Materials,
-        coords: Self::Coords,
-    ) {
-        self.clear_selection(commands);
-        if !self.data.contains_key(&coords) {
-            return;
-        }
-
-        let mesh = materials.selected_mesh.clone();
-        let material = materials.selected_material.clone();
-        let pos = coords.to_world().with_z(-1.0);
-
-        let entity = commands
-            .spawn((mesh, material, Transform::from_translation(pos)))
-            .id();
-        commands.entity(self.parent).add_child(entity);
-
-        self.selected = Some((coords, entity));
-    }
-
-    fn clear_selection(&mut self, commands: &mut Commands) {
-        if let Some((_, entity)) = self.selected {
-            commands.entity(entity).despawn();
-        }
-
-        self.selected = None;
+    fn get_config(&self) -> Arc<Config> {
+        self.config.clone()
     }
 }
